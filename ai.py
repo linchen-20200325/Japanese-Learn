@@ -173,6 +173,41 @@ READING_GEN_PROMPT = """你是日文閱讀教材編輯。使用者給「主題 +
 """
 
 
+DIALOGUE_GEN_PROMPT = """你是日文會話教材編輯。使用者給「情境 + JLPT 級別」，你產出一段自然的生活對話練習。
+
+# 嚴格輸出 JSON（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
+{
+  "id": "topic-keyword-id",
+  "title": "日文標題",
+  "title_zh": "繁中標題",
+  "level": "N5 / N4 / N3 / N2 / N1 擇一",
+  "scene": "繁中一句話描述對話場景",
+  "lines": [
+    {
+      "speaker": "說話者（A／B 或角色名）",
+      "jp": "自然口語日文（含漢字），≤ 25 字/句",
+      "kana": "整句假名讀音",
+      "zh": "繁中翻譯"
+    }
+  ],
+  "grammar": [
+    {"point": "文法重點", "explain": "繁中解說", "example": "日文例句"}
+  ]
+}
+
+# 數量規範
+- lines: 6-10 句（兩人來回對話）
+- grammar: 2-4 條重點，貼合對話中出現的句型
+
+# 級別差異
+- N5: 50 音、基礎問候、生活單字、現在/過去式
+- N4: 日常會話、て形、可能形、授受動詞
+- N3: 複雜句型、抽象語彙、被動使役
+- N2: 書面語、商務日文、接續詞
+- N1: 慣用句、正式文書、高階語彙
+"""
+
+
 # ===========================================================================
 # Secret / key 讀取與清潔
 # ===========================================================================
@@ -341,8 +376,18 @@ def generate_material(scenario: str, level: str, tier: str) -> str:
 
 
 def gen_reading(topic: str, level: str, tier: str) -> dict:
-    """呼叫 Gemini 產出一篇可互動日文閱讀。"""
+    """呼叫 Gemini 產出一篇可互動日文閱讀（書籍／文章短文）。"""
     text = _llm_generate(READING_GEN_PROMPT, f"主題：{topic}\n級別：{level}",
+                         tier, max_tokens=6000)
+    m = re.search(r"\{[\s\S]*\}", text)
+    if not m:
+        raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
+    return json.loads(m.group(0))
+
+
+def gen_dialogue(scenario: str, level: str, tier: str) -> dict:
+    """呼叫 Gemini 產出一段生活對話練習。"""
+    text = _llm_generate(DIALOGUE_GEN_PROMPT, f"情境：{scenario}\n級別：{level}",
                          tier, max_tokens=6000)
     m = re.search(r"\{[\s\S]*\}", text)
     if not m:

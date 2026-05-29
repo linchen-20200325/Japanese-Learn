@@ -820,6 +820,159 @@ def page_review() -> None:
         st.rerun()
 
 
+# ===========================================================================
+# 🗣️ AI 生活對話（Gemini → 雙語對話 + 文法重點）
+# ===========================================================================
+def page_ai_dialogue(level: str) -> None:
+    st.header(f"🗣️ {data.LEVELS[level]['label']} AI 生活對話")
+    with st.expander("💡 這是什麼？怎麼用？", expanded=False):
+        st.markdown(
+            "**生活對話**＝把你想練的場景一鍵生成一段日本人的自然對話。\n\n"
+            "輸入情境（例如：在便利商店結帳、跟房東報修、跟朋友約吃飯），按「生成 ✨」，"
+            "Gemini 會依目前 JLPT 級別產出 **6–10 句雙語對話**（每句可發音）＋ **文法重點**。"
+            "喜歡的對話可整段「加入複習」做 SRS。"
+        )
+
+    if not ai.get_api_key():
+        st.warning("尚未設定 Gemini API 金鑰，無法生成。請至側欄或 Cloud Secrets 設定 "
+                   "`GEMINI_API_KEY`（取得：https://aistudio.google.com/apikey）。")
+        return
+
+    with st.form(f"dlg_form_{level}", clear_on_submit=False):
+        scenario = st.text_input("對話情境",
+                                 placeholder="例如：在便利商店結帳並詢問有沒有熱食")
+        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"dlg_tier_{level}")
+        submitted = st.form_submit_button("生成 ✨", type="primary")
+
+    if submitted:
+        if not scenario.strip():
+            st.warning("請先輸入情境。")
+        else:
+            with st.spinner("生成中…"):
+                try:
+                    st.session_state[f"dlg_result_{level}"] = ai.gen_dialogue(
+                        scenario.strip(), level, model_label)
+                except Exception as e:  # noqa: BLE001
+                    st.session_state.pop(f"dlg_result_{level}", None)
+                    st.error(_friendly_gen_error(str(e)))
+
+    dlg = st.session_state.get(f"dlg_result_{level}")
+    if dlg and dlg.get("lines"):
+        st.divider()
+        st.markdown(f"#### 📍 {dlg.get('title', '')}　{dlg.get('title_zh', '')}")
+        if dlg.get("scene"):
+            st.caption(f"場景：{dlg['scene']}")
+        for i, ln in enumerate(dlg["lines"]):
+            with st.container(border=True):
+                st.markdown(f"**{ln.get('speaker', '')}：** {ln.get('jp', '')}")
+                meta = []
+                if ln.get("kana"):
+                    meta.append(f"假名 `{ln['kana']}`")
+                if meta:
+                    st.caption("　".join(meta))
+                if ln.get("zh"):
+                    st.markdown(f"🇹🇼 {ln['zh']}")
+                if ln.get("jp"):
+                    play_button(ln["jp"], key=f"dlg_play_{level}_{i}")
+        if dlg.get("grammar"):
+            st.markdown("##### 📚 文法重點")
+            for g in dlg["grammar"]:
+                with st.container(border=True):
+                    st.markdown(f"**🎯 {g.get('point', '')}**")
+                    if g.get("explain"):
+                        st.caption(g["explain"])
+                    if g.get("example"):
+                        st.markdown(f"　- `{g['example']}`")
+
+        c1, c2 = st.columns(2)
+        if c1.button(f"➕ 加入 {len(dlg['lines'])} 句到複習",
+                     use_container_width=True, key=f"dlg_rev_{level}"):
+            cards = [
+                {"sentence": ln["jp"], "kana": ln.get("kana", ""),
+                 "chinese": ln.get("zh", ""), "chunk": ln["jp"][:20],
+                 "context": f"對話：{dlg.get('title', '')}"}
+                for ln in dlg["lines"] if ln.get("jp")
+            ]
+            n = add_cards_to_review(cards)
+            st.success(f"已加入 {n} 句到複習清單。" if n else "這些句子已在複習清單中。")
+        if c2.button("🗑️ 清除結果", use_container_width=True, key=f"dlg_clear_{level}"):
+            st.session_state.pop(f"dlg_result_{level}", None)
+            st.rerun()
+
+
+# ===========================================================================
+# 📚 AI 互動閱讀（書籍／文章 → 可點字看翻譯 + 發音 + 文法）
+# ===========================================================================
+def page_ai_reading(level: str) -> None:
+    st.header(f"📚 {data.LEVELS[level]['label']} AI 互動閱讀")
+    with st.expander("💡 這是什麼？怎麼用？", expanded=False):
+        st.markdown(
+            "**互動閱讀**＝輸入任何主題（書籍、文章、生活短文），AI 依 JLPT 級別生成一篇日文閱讀，"
+            "附整句假名、中文翻譯、重點單字與文法。每句可發音，喜歡的可整篇「加入複習」。"
+        )
+
+    if not ai.get_api_key():
+        st.warning("尚未設定 Gemini API 金鑰，無法生成。請至側欄或 Cloud Secrets 設定 "
+                   "`GEMINI_API_KEY`（取得：https://aistudio.google.com/apikey）。")
+        return
+
+    with st.form(f"rd_form_{level}", clear_on_submit=False):
+        topic = st.text_input("主題／書籍",
+                              placeholder="例如：桃太郎的故事 / 我的一天 / 環境保護")
+        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"rd_tier_{level}")
+        submitted = st.form_submit_button("生成 ✨", type="primary")
+
+    if submitted:
+        if not topic.strip():
+            st.warning("請先輸入主題。")
+        else:
+            with st.spinner("生成中…"):
+                try:
+                    st.session_state[f"rd_result_{level}"] = ai.gen_reading(
+                        topic.strip(), level, model_label)
+                except Exception as e:  # noqa: BLE001
+                    st.session_state.pop(f"rd_result_{level}", None)
+                    st.error(_friendly_gen_error(str(e)))
+
+    rd = st.session_state.get(f"rd_result_{level}")
+    if rd and rd.get("sentences"):
+        st.divider()
+        st.markdown(f"#### 📖 {rd.get('title', '')}　{rd.get('title_zh', '')}")
+        if rd.get("summary"):
+            st.caption(rd["summary"])
+        for i, s in enumerate(rd["sentences"]):
+            with st.container(border=True):
+                st.markdown(f"### {s.get('jp', '')}")
+                if s.get("kana"):
+                    st.caption(f"假名 `{s['kana']}`")
+                if s.get("zh"):
+                    st.markdown(f"🇹🇼 {s['zh']}")
+                vocab = s.get("vocab") or {}
+                if vocab:
+                    st.markdown("📝 重點單字：" + "　".join(
+                        f"**{w}**＝{m}" for w, m in vocab.items()))
+                if s.get("grammar"):
+                    st.markdown(f"📚 文法：{s['grammar']}")
+                if s.get("jp"):
+                    play_button(s["jp"], key=f"rd_play_{level}_{i}")
+
+        c1, c2 = st.columns(2)
+        if c1.button(f"➕ 加入 {len(rd['sentences'])} 句到複習",
+                     use_container_width=True, key=f"rd_rev_{level}"):
+            cards = [
+                {"sentence": s["jp"], "kana": s.get("kana", ""),
+                 "chinese": s.get("zh", ""), "chunk": s["jp"][:20],
+                 "grammar": s.get("grammar", ""),
+                 "context": f"閱讀：{rd.get('title', '')}"}
+                for s in rd["sentences"] if s.get("jp")
+            ]
+            n = add_cards_to_review(cards)
+            st.success(f"已加入 {n} 句到複習清單。" if n else "這些句子已在複習清單中。")
+        if c2.button("🗑️ 清除結果", use_container_width=True, key=f"rd_clear_{level}"):
+            st.session_state.pop(f"rd_result_{level}", None)
+            st.rerun()
+
+
 def render_ai_sidebar() -> None:
     """側欄顯示 Gemini key 與 GitHub Token 狀態 + 一鍵測試。"""
     st.sidebar.divider()
@@ -891,7 +1044,8 @@ def main() -> None:
     if level == "N5":
         functions.append("50音")
     functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "情境短文與進級",
-                  "🤖 AI 情境生成", "📖 單字庫", "🔁 複習"]
+                  "🤖 AI 情境生成", "🗣️ AI 生活對話", "📚 AI 互動閱讀",
+                  "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -929,6 +1083,10 @@ def main() -> None:
         page_passage(level)
     elif feature == "🤖 AI 情境生成":
         page_ai_generate(level)
+    elif feature == "🗣️ AI 生活對話":
+        page_ai_dialogue(level)
+    elif feature == "📚 AI 互動閱讀":
+        page_ai_reading(level)
     elif feature == "📖 單字庫":
         page_vocab_bank(level)
     elif feature == "🔁 複習":
