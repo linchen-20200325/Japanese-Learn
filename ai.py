@@ -17,6 +17,8 @@ import re
 import streamlit as st
 
 VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_bank.json")
+# AI 生成的閱讀永久庫（推回 GitHub 後持續累積長大，重整不消失）
+READINGS_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "readings_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -479,6 +481,70 @@ def load_vocab_bank() -> dict:
     except OSError:
         mtime = 0.0
     return _load_vocab_bank_cached(mtime)
+
+
+# ---------------------------------------------------------------------------
+# 閱讀永久庫（AI 生成 → 寫本機 + 推回 GitHub，資料庫越長越大）
+# ---------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def _load_readings_bank_cached(_mtime: float) -> list:
+    try:
+        with open(READINGS_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_readings_bank() -> list:
+    """讀取 readings_bank.json（AI 生成且已永久保存的日文閱讀清單）。"""
+    try:
+        mtime = os.path.getmtime(READINGS_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_readings_bank_cached(mtime)
+
+
+def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
+    """通用 GitHub Contents API 寫檔：檔案不存在則建立、存在則更新。回傳 (ok, info)。"""
+    import base64
+    import urllib.error
+    import urllib.request
+
+    token = get_github_token()
+    if not token:
+        return False, {"stage": "token", "msg": "未設定 GITHUB_TOKEN"}
+    repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
+    branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
+    api = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "User-Agent": "japanese-learn-cloud",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    sha = None
+    try:
+        req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            sha = json.loads(r.read()).get("sha")
+    except Exception:  # noqa: BLE001 - 404 = 首次建立
+        sha = None
+    body = {"message": commit_msg,
+            "content": base64.b64encode(payload_json.encode("utf-8")).decode("ascii"),
+            "branch": branch}
+    if sha:
+        body["sha"] = sha
+    try:
+        req2 = urllib.request.Request(api, data=json.dumps(body).encode("utf-8"),
+                                      method="PUT",
+                                      headers={**headers, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req2, timeout=20) as r:
+            json.loads(r.read())
+        return True, {"branch": branch}
+    except urllib.error.HTTPError as e:
+        return False, {"stage": "PUT", "code": e.code,
+                       "body": e.read().decode("utf-8", "replace")[:200]}
+    except Exception as e:  # noqa: BLE001
+        return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
 
 
 def generate_vocab_batch(words: list, tier: str) -> list:
