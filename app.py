@@ -1063,36 +1063,97 @@ def page_ai_dialogue(level: str) -> None:
 # ===========================================================================
 # 📚 AI 互動閱讀（書籍／文章 → 可點字看翻譯 + 發音 + 文法）
 # ===========================================================================
+# 隨機生成用的多元日文閱讀主題池（每按一次都不同，源源不絕）
+_JP_READING_TOPICS = [
+    "桃太郎の物語", "私の一日", "環境保護", "日本の四季", "コンビニでの買い物",
+    "電車での通勤", "祖母の思い出", "初めての一人暮らし", "好きな食べ物",
+    "週末の過ごし方", "夢に向かって", "引っ越しの一日", "雨の日の過ごし方",
+    "友達との約束", "新しい趣味", "健康な生活", "旅行の計画", "図書館での出来事",
+    "猫との暮らし", "失敗から学んだこと", "お祭りの思い出", "料理に挑戦",
+    "日本語の勉強法", "町の小さな店", "季節の変わり目", "夜空を見上げて",
+    "古い手紙", "見知らぬ人の親切", "技術と私たちの生活", "ふるさとの風景",
+]
+
+
+def _persist_reading_jp(reading: dict, level: str) -> tuple:
+    """把生成的閱讀加入永久庫：寫本機 + 推回 GitHub，讓資料庫持續長大。回傳 (ok, info)。"""
+    reading.setdefault("level", level)
+    bank = list(ai.load_readings_bank())
+    ids = {r.get("id") for r in bank}
+    rid = reading.get("id") or reading.get("title", "")
+    reading["id"] = rid if rid and rid not in ids else f"{rid or 'rd'}-{len(bank)}"
+    bank.append(reading)
+    payload = json.dumps(bank, ensure_ascii=False, indent=2) + "\n"
+    try:
+        with open(ai.READINGS_BANK_FILE, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except OSError:
+        pass
+    for fn in (ai.load_readings_bank, ai._load_readings_bank_cached):
+        if hasattr(fn, "clear"):
+            fn.clear()
+    return ai.github_put_file(
+        "readings_bank.json", payload,
+        f"readings_bank: AI 生成新增「{reading.get('title','')}」（共 {len(bank)} 篇）")
+
+
+def _do_generate_reading(topic: str, level: str, model_label: str) -> None:
+    """生成一篇閱讀 → 存進永久庫 → 設為當前顯示結果。"""
+    with st.spinner(f"生成「{topic}」中…"):
+        rd = ai.gen_reading(topic, level, model_label)
+    ok, info = _persist_reading_jp(rd, level)
+    st.session_state[f"rd_result_{level}"] = rd
+    st.session_state["_rd_saved"] = ok
+
+
 def page_ai_reading(level: str) -> None:
     st.header(f"📚 {data.LEVELS[level]['label']} AI 互動閱讀")
     with st.expander("💡 這是什麼？怎麼用？", expanded=False):
         st.markdown(
-            "**互動閱讀**＝輸入任何主題（書籍、文章、生活短文），AI 依 JLPT 級別生成一篇日文閱讀，"
-            "附整句假名、中文翻譯、重點單字與文法。每句可發音，喜歡的可整篇「加入複習」。"
+            "**互動閱讀**＝AI 依 JLPT 級別生成日文閱讀，附整句假名、中文翻譯、重點單字與文法。\n\n"
+            "按「🎲 隨機生成」一鍵冒出全新文章；生成的閱讀會**永久存進資料庫並持續累積**"
+            "（需設定 `GITHUB_TOKEN`），下方「已累積的閱讀」隨時可重讀。"
         )
 
+    if st.session_state.pop("_rd_saved", None):
+        st.success("已生成並永久存入資料庫！下方「已累積的閱讀」會越來越多。")
+
+    # 生成 UI 需要金鑰；沒金鑰仍可閱讀下方已累積的文章
     if not ai.get_api_key():
-        st.warning("尚未設定 Gemini API 金鑰，無法生成。請至側欄或 Cloud Secrets 設定 "
-                   "`GEMINI_API_KEY`（取得：https://aistudio.google.com/apikey）。")
-        return
+        st.warning("尚未設定 Gemini API 金鑰，無法「生成」新閱讀（下方已累積的文章仍可閱讀）。"
+                   "請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`"
+                   "（取得：https://aistudio.google.com/apikey）。")
+    else:
+        model_label = next(iter(ai.GEN_MODEL_TIERS))
+        rc1, rc2 = st.columns([3, 2])
+        if rc1.button("🎲 隨機生成一篇新閱讀", type="primary", use_container_width=True,
+                      key=f"rd_rand_{level}",
+                      help="自動挑一個主題，依目前級別生成全新閱讀。每按一次都不一樣。"):
+            used = {r.get("title") for r in ai.load_readings_bank()}
+            pool = [t for t in _JP_READING_TOPICS if t not in used] or _JP_READING_TOPICS
+            try:
+                _do_generate_reading(random.choice(pool), level, model_label)
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(_friendly_gen_error(str(e)))
+        rc2.caption(f"📚 資料庫已累積 **{len(ai.load_readings_bank())}** 篇")
 
-    with st.form(f"rd_form_{level}", clear_on_submit=False):
-        topic = st.text_input("主題／書籍",
-                              placeholder="例如：桃太郎的故事 / 我的一天 / 環境保護")
-        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"rd_tier_{level}")
-        submitted = st.form_submit_button("生成 ✨", type="primary")
-
-    if submitted:
-        if not topic.strip():
-            st.warning("請先輸入主題。")
-        else:
-            with st.spinner("生成中…"):
-                try:
-                    st.session_state[f"rd_result_{level}"] = ai.gen_reading(
-                        topic.strip(), level, model_label)
-                except Exception as e:  # noqa: BLE001
-                    st.session_state.pop(f"rd_result_{level}", None)
-                    st.error(_friendly_gen_error(str(e)))
+        with st.expander("✍️ 想指定主題自己生成？", expanded=False):
+            with st.form(f"rd_form_{level}", clear_on_submit=False):
+                topic = st.text_input("主題／書籍",
+                                      placeholder="例如：桃太郎的故事 / 我的一天 / 環境保護")
+                tier = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"rd_tier_{level}")
+                submitted = st.form_submit_button("生成 ✨")
+            if submitted:
+                if not topic.strip():
+                    st.warning("請先輸入主題。")
+                else:
+                    try:
+                        _do_generate_reading(topic.strip(), level, tier)
+                        st.rerun()
+                    except Exception as e:  # noqa: BLE001
+                        st.session_state.pop(f"rd_result_{level}", None)
+                        st.error(_friendly_gen_error(str(e)))
 
     rd = st.session_state.get(f"rd_result_{level}")
     if rd and rd.get("sentences"):
@@ -1131,6 +1192,35 @@ def page_ai_reading(level: str) -> None:
         if c2.button("🗑️ 清除結果", use_container_width=True, key=f"rd_clear_{level}"):
             st.session_state.pop(f"rd_result_{level}", None)
             st.rerun()
+
+    # 📚 已累積的閱讀（永久庫，越長越多，重整不消失）
+    bank = ai.load_readings_bank()
+    if bank:
+        st.divider()
+        st.markdown(f"### 📚 已累積的閱讀（共 {len(bank)} 篇）")
+        st.caption("這些是歷次 AI 生成、已存進 GitHub 資料庫的閱讀，隨時可重讀。")
+        for bi, r in enumerate(reversed(bank)):  # 新的排上面
+            with st.expander(f"📖 {r.get('title','')}　{r.get('title_zh','')}"
+                             f"　·　{r.get('level','')}"):
+                if r.get("summary"):
+                    st.caption(r["summary"])
+                for i, s in enumerate(r.get("sentences", [])):
+                    st.markdown(f"**{s.get('jp','')}**")
+                    if s.get("kana"):
+                        st.caption(f"假名 `{s['kana']}`")
+                    if s.get("zh"):
+                        st.caption(f"🇹🇼 {s['zh']}")
+                    if s.get("jp"):
+                        play_button(s["jp"], key=f"bank_play_{level}_{bi}_{i}")
+                if st.button(f"➕ 加入 {len(r.get('sentences',[]))} 句到複習",
+                             key=f"bank_rev_{level}_{bi}", use_container_width=True):
+                    cards = [{"sentence": s["jp"], "kana": s.get("kana", ""),
+                              "chinese": s.get("zh", ""), "chunk": s["jp"][:20],
+                              "grammar": s.get("grammar", ""),
+                              "context": f"閱讀：{r.get('title','')}"}
+                             for s in r.get("sentences", []) if s.get("jp")]
+                    n = add_cards_to_review(cards)
+                    st.success(f"已加入 {n} 句。" if n else "已在複習清單中。")
 
 
 def render_ai_sidebar() -> None:
@@ -1229,7 +1319,8 @@ def main() -> None:
     if level == "N5":
         functions.append("50音")
     functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
-                  "💬 情境會話", "📖 單字庫", "🔁 複習"]
+                  "📄 情境短文", "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
+                  "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1265,8 +1356,14 @@ def main() -> None:
         page_flashcards(level)
     elif feature == "文法解說核心":
         page_grammar(level)
-    elif feature == "💬 情境會話":
-        page_scenario(level)
+    elif feature == "📄 情境短文":
+        page_passage(level)
+    elif feature == "🗣️ AI 生活對話":
+        page_ai_dialogue(level)
+    elif feature == "🤖 AI 情境生成":
+        page_ai_generate(level)
+    elif feature == "📚 AI 互動閱讀":
+        page_ai_reading(level)
     elif feature == "📖 單字庫":
         page_vocab_bank(level)
     elif feature == "🔁 複習":
