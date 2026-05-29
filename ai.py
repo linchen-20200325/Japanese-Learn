@@ -17,7 +17,7 @@ import re
 import streamlit as st
 
 VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_bank.json")
-DEFAULT_REPO = "linchen-20200325/japanese-learn"
+DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
 # ===========================================================================
@@ -497,6 +497,26 @@ def generate_vocab_batch(words: list, tier: str) -> list:
     return extract_json_array(text)
 
 
+def _repo_default_branch(repo: str, token: str) -> str:
+    """查 repo 的預設分支；查不到時退回 'main'。
+
+    本 repo 沒有 main 分支（預設為 claude/jlpt-streamlit-...），若硬寫 'main' 會 404，
+    導致 AI 生成的單字推不回去而無法保存。故自動偵測預設分支最穩妥。
+    """
+    import urllib.error
+    import urllib.request
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}",
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "japanese-learn-cloud"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.loads(r.read()).get("default_branch") or "main"
+    except Exception:  # noqa: BLE001
+        return "main"
+
+
 def push_bank_to_github(merged: dict, silent: bool = False):
     """把合併後的 vocab_bank 透過 GitHub Contents API 推回 repo。回傳 (ok, info)。"""
     import base64
@@ -508,7 +528,8 @@ def push_bank_to_github(merged: dict, silent: bool = False):
         return False, {"stage": "token", "msg": "未設定 GITHUB_TOKEN secret"}
 
     repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
-    branch = _read_secret("GITHUB_BRANCH") or "main"
+    # 分支：優先用 GITHUB_BRANCH secret；未設則自動偵測 repo 預設分支（本 repo 無 main）
+    branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
     path = "vocab_bank.json"
     payload_json = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
 
