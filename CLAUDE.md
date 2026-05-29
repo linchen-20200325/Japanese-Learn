@@ -16,12 +16,14 @@
 - **資料**：以 `data.py` 模擬 JSON 載入；未來可無痛換成 `json.load(...)`
 
 ## 3. 架構規範
-- **資料與 UI 分離**：所有 N1~N5 的單字／文法／短文／50音資料一律放在 `data.py`，
-  `app.py` 僅負責呈現與互動，禁止把資料硬塞進 UI 層。
+- **資料與 UI 分離**：所有 N1~N5 的單字／文法／短文／文章／50音資料一律放在
+  `db/` 目錄下的 JSON 資料庫（`db/N1.json`～`db/N5.json`、`db/gojuon.json`），
+  `data.py` 為資料存取層，`app.py` 僅負責呈現與互動，禁止把資料硬塞進 UI 層。
 - **單字資料欄位**（缺一不可）：
-  `level`、`kanji`、`kana`、`romaji`、`chinese`、`grammar`
-- **存取介面**：一律透過 `load_vocab / load_grammar / load_passage / load_gojuon`，
-  禁止外部直接讀取 `_RAW_*` 私有字典。
+  `level`、`kanji`、`kana`、`romaji`、`chinese`、`grammar`、`usage`、`examples`。
+  其中 `examples` 為例句清單，每句含 `jp`（日文）、`kana`（唸法）、`zh`（中文）。
+- **存取介面**：一律透過 `load_vocab / load_grammar / load_passages / load_gojuon`，
+  禁止外部直接讀取資料層的私有快取函式（`_load_json` / `_load_level`）。
 
 ## 4. UI / UX 規範
 - **Sidebar 兩層導覽**：

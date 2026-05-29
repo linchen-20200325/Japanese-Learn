@@ -5,6 +5,8 @@ app.py — JLPT 全階段日文學習 App（N1 ~ N5）
 特色：
     • Sidebar 兩層導覽：先選級別，再切換功能。
     • 50 音僅在「N5 基礎」顯示，其餘級別自動隱藏，保持介面乾淨。
+    • 單字／例句「選到才顯示」中文與唸法（假名），搭配使用說明與例句。
+    • 文法解說含意義、用法與多組例句；情境短文／文章可逐句顯示唸法與中文。
     • 每個級別擁有獨立的學習進度（st.session_state 不互相覆蓋）。
     • gTTS 採記憶體級播放（BytesIO），避免實體檔案鎖定（File Lock）。
 
@@ -15,6 +17,7 @@ app.py — JLPT 全階段日文學習 App（N1 ~ N5）
 
 import json
 import os
+import random
 from datetime import date, timedelta
 from io import BytesIO
 
@@ -80,18 +83,31 @@ def synthesize_speech(text: str) -> bytes:
     return buffer.getvalue()
 
 
-def play_button(text: str, key: str) -> None:
+def play_button(text: str, key: str, label: str = "🔊 發音") -> None:
     """渲染一個發音按鈕；按下後於記憶體中合成並播放。"""
     if not _GTTS_AVAILABLE:
         st.caption("🔇 語音功能需安裝 gTTS 並連線網路")
         return
 
-    if st.button("🔊 發音", key=key):
+    if st.button(label, key=key):
         try:
             audio_bytes = synthesize_speech(text)
             st.audio(audio_bytes, format="audio/mp3")
         except Exception as exc:  # 網路或服務暫時不可用
             st.warning(f"語音合成失敗（請檢查網路）：{exc}")
+
+
+def render_examples(examples: list, key_prefix: str) -> None:
+    """渲染例句清單：日文 + 唸法 + 中文 + 發音。"""
+    if not examples:
+        return
+    st.markdown("**例句：**")
+    for i, ex in enumerate(examples):
+        with st.container(border=True):
+            st.markdown(f"🇯🇵 {ex['jp']}")
+            st.caption(f"📖 唸法：{ex.get('kana', '')}")
+            st.caption(f"🇹🇼 {ex.get('zh', '')}")
+            play_button(ex["jp"], key=f"{key_prefix}_ex_{i}", label="🔊 播放例句")
 
 
 # ===========================================================================
@@ -127,26 +143,40 @@ def learned_count(level: str) -> int:
 def page_gojuon(level: str) -> None:
     """50 音（基礎，僅 N5）。"""
     st.header("🈁 50 音入門")
-    st.write("日文的基礎發音表，建議先熟練清音再進入單字學習。")
+    st.write("日文的基礎發音表，建議先熟練清音，再進入濁音、半濁音與拗音。")
 
     gojuon = data.load_gojuon()
-    cols_per_row = 5
-    for i in range(0, len(gojuon), cols_per_row):
-        cols = st.columns(cols_per_row)
-        for col, item in zip(cols, gojuon[i : i + cols_per_row]):
-            with col:
-                st.markdown(
-                    f"<div style='text-align:center;font-size:2rem;"
-                    f"line-height:1.2'>{item['kana']}</div>"
-                    f"<div style='text-align:center;color:#888'>{item['romaji']}</div>",
-                    unsafe_allow_html=True,
-                )
-                play_button(item["kana"], key=f"goj_{item['romaji']}")
+    sections = [
+        ("清音", "seion"),
+        ("濁音", "dakuon"),
+        ("半濁音", "handakuon"),
+        ("拗音", "yoon"),
+    ]
+
+    tabs = st.tabs([name for name, _ in sections])
+    for tab, (name, key) in zip(tabs, sections):
+        with tab:
+            rows = gojuon.get(key, [])
+            cols_per_row = 5
+            for i in range(0, len(rows), cols_per_row):
+                cols = st.columns(cols_per_row)
+                for j, (col, item) in enumerate(zip(cols, rows[i : i + cols_per_row])):
+                    with col:
+                        st.markdown(
+                            f"<div style='text-align:center;font-size:2rem;"
+                            f"line-height:1.2'>{item['kana']}</div>"
+                            f"<div style='text-align:center;color:#888'>"
+                            f"{item['romaji']}</div>",
+                            unsafe_allow_html=True,
+                        )
+                        # 用 (區段, 位置索引) 當 key，避免 じ/ぢ、ず/づ 同 romaji 撞 key
+                        play_button(item["kana"], key=f"goj_{key}_{i + j}_{item['romaji']}")
 
 
 def page_vocab(level: str) -> None:
     """核心單字庫（依級別動態切換）。"""
     st.header(f"📚 {data.LEVELS[level]['label']} 核心單字庫")
+    st.caption("點開「顯示中文與唸法」即可看到中文翻譯、假名唸法、使用方式與例句。")
 
     vocab = data.load_vocab(level)
     if not vocab:
@@ -162,16 +192,14 @@ def page_vocab(level: str) -> None:
     for idx, word in enumerate(vocab):
         done = word["kanji"] in learned
         with st.container(border=True):
-            top, btn = st.columns([4, 1])
-            with top:
+            head, btn = st.columns([4, 1])
+            with head:
+                # 預設只顯示漢字（與詞性），中文與唸法需「選到才跑出來」
                 st.subheader(f"{word['kanji']}　{'✅' if done else ''}")
-                st.markdown(
-                    f"**假名：** {word['kana']}　|　**羅馬拼音：** {word['romaji']}"
-                )
-                st.markdown(f"**中文：** {word['chinese']}")
-                st.caption(f"📝 核心文法：{word['grammar']}")
+                if word.get("pos"):
+                    st.caption(f"詞性：{word['pos']}")
             with btn:
-                play_button(word["kanji"], key=f"vocab_{level}_{idx}")
+                play_button(word["kanji"], key=f"vocab_play_{level}_{idx}")
                 if st.button(
                     "已學會" if not done else "↩️ 取消",
                     key=f"learn_{level}_{idx}",
@@ -182,10 +210,23 @@ def page_vocab(level: str) -> None:
                         mark_learned(level, word["kanji"])
                     st.rerun()
 
+            with st.expander("👀 顯示中文與唸法"):
+                st.markdown(
+                    f"**唸法（假名）：** {word['kana']}　|　"
+                    f"**羅馬拼音：** {word['romaji']}"
+                )
+                st.markdown(f"**中文：** {word['chinese']}")
+                if word.get("grammar"):
+                    st.info(f"📝 核心文法：{word['grammar']}")
+                if word.get("usage"):
+                    st.success(f"💡 怎麼用：{word['usage']}")
+                render_examples(word.get("examples", []), key_prefix=f"vocab_{level}_{idx}")
+
 
 def page_grammar(level: str) -> None:
     """文法解說核心（依級別動態切換）。"""
     st.header(f"📖 {data.LEVELS[level]['label']} 文法解說核心")
+    st.caption("每個文法皆含意義、用法說明與多組例句（可顯示唸法與中文）。")
 
     grammar = data.load_grammar(level)
     if not grammar:
@@ -194,26 +235,46 @@ def page_grammar(level: str) -> None:
 
     for idx, g in enumerate(grammar):
         with st.expander(f"{g['point']}　—　{g['meaning']}", expanded=(idx == 0)):
-            st.markdown(f"**例句：** {g['example']}")
-            st.markdown(f"**中譯：** {g['example_zh']}")
-            play_button(g["example"], key=f"gram_{level}_{idx}")
+            st.markdown(f"**意義：** {g['meaning']}")
+            if g.get("usage"):
+                st.success(f"💡 用法：{g['usage']}")
+            render_examples(g.get("examples", []), key_prefix=f"gram_{level}_{idx}")
 
 
 def page_passage(level: str) -> None:
-    """情境短文與進級（含小測驗，依級別動態切換）。"""
+    """情境短文與進級（多篇短文／文章 + 小測驗，依級別動態切換）。"""
     st.header(f"📝 {data.LEVELS[level]['label']} 情境短文與進級")
 
-    passage = data.load_passage(level)
-    if not passage.get("japanese"):
+    passages = data.load_passages(level)
+    if not passages:
         st.info("此級別尚無短文資料。")
         return
 
-    st.subheader(passage["title"])
-    with st.container(border=True):
-        st.markdown(f"### {passage['japanese']}")
-        play_button(passage["japanese"], key=f"passage_{level}")
-        with st.expander("顯示中文翻譯"):
-            st.write(passage["chinese"])
+    titles = [f"{p.get('type', '短文')}｜{p['title']}" for p in passages]
+    choice = st.radio("選擇一篇閱讀：", titles, key=f"passage_pick_{level}")
+    passage = passages[titles.index(choice)]
+
+    st.subheader(f"{passage.get('type', '短文')}：{passage['title']}")
+
+    # 整篇朗讀
+    full_text = "".join(s["jp"] for s in passage.get("sentences", []))
+    play_button(full_text, key=f"passage_full_{level}", label="🔊 整篇朗讀")
+
+    show_all = st.toggle("顯示全文唸法與中文", key=f"passage_showall_{level}")
+
+    for i, sent in enumerate(passage.get("sentences", [])):
+        with st.container(border=True):
+            st.markdown(f"### {sent['jp']}")
+            cols = st.columns([1, 3])
+            with cols[0]:
+                play_button(sent["jp"], key=f"passage_{level}_{i}", label="🔊 播放")
+            if show_all:
+                st.caption(f"📖 唸法：{sent.get('kana', '')}")
+                st.caption(f"🇹🇼 {sent.get('zh', '')}")
+            else:
+                with st.expander("顯示唸法與中文"):
+                    st.caption(f"📖 唸法：{sent.get('kana', '')}")
+                    st.caption(f"🇹🇼 {sent.get('zh', '')}")
 
     st.divider()
     _vocab_quiz(level)
@@ -227,15 +288,13 @@ def _vocab_quiz(level: str) -> None:
         st.info("單字不足，無法產生測驗。")
         return
 
-    import random
-
     quiz_key = f"current_quiz_{level}"
     # 為每個級別維持一題當前題目，切換級別不互相干擾。
     if quiz_key not in st.session_state:
-        st.session_state[quiz_key] = _new_question(level, vocab, random)
+        st.session_state[quiz_key] = _new_question(vocab)
 
     q = st.session_state[quiz_key]
-    st.write(f"請問「**{q['prompt']}**」的正確假名是？")
+    st.write(f"請問「**{q['prompt']}**」的正確唸法（假名）是？")
 
     choice = st.radio(
         "選擇答案：",
@@ -256,7 +315,7 @@ def _vocab_quiz(level: str) -> None:
                 st.error(f"再加油！正確答案是：{q['answer']}")
     with col_next:
         if st.button("下一題 ➡️", key=f"next_{level}_{q['nonce']}"):
-            st.session_state[quiz_key] = _new_question(level, vocab, random)
+            st.session_state[quiz_key] = _new_question(vocab)
             st.rerun()
 
     stats = st.session_state.quiz[level]
@@ -267,18 +326,18 @@ def _vocab_quiz(level: str) -> None:
         )
 
 
-def _new_question(level: str, vocab: list, random_mod) -> dict:
+def _new_question(vocab: list) -> dict:
     """產生一道測驗題（中文 → 選假名）。"""
-    target = random_mod.choice(vocab)
+    target = random.choice(vocab)
     distractors = [w for w in vocab if w["kanji"] != target["kanji"]]
-    sample = random_mod.sample(distractors, k=min(3, len(distractors)))
+    sample = random.sample(distractors, k=min(3, len(distractors)))
     options = [target["kana"]] + [w["kana"] for w in sample]
-    random_mod.shuffle(options)
+    random.shuffle(options)
     return {
         "prompt": target["chinese"],
         "answer": target["kana"],
         "options": options,
-        "nonce": random_mod.randint(0, 10**9),
+        "nonce": random.randint(0, 10**9),
     }
 
 
@@ -399,8 +458,12 @@ def page_flashcards(level: str) -> None:
 
     deck = []
     for w in data.load_vocab(level):
+        ex = (w.get("examples") or [{}])[0]
         deck.append({"word": w["kanji"], "kana": w["kana"], "romaji": w["romaji"],
-                     "meaning_zh": w["chinese"], "usage_zh": w["grammar"], "src": "core"})
+                     "meaning_zh": w["chinese"], "usage_zh": w.get("usage") or w.get("grammar", ""),
+                     "pos": w.get("pos", ""),
+                     "example_jp": ex.get("jp", ""), "example_zh": ex.get("zh", ""),
+                     "src": "core"})
     have = {d["word"] for d in deck}
     for k, e in full_bank.items():
         if e.get("jlpt") == level and k not in have:
