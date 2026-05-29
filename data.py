@@ -2,19 +2,44 @@
 """
 data.py — JLPT 日文學習資料層（N1 ~ N5）
 
-本模組以「模擬從外部 JSON 載入」的方式提供資料，
-未來只要把 `_RAW_*` 字典換成 `json.load(open(...))` 即可無痛切換到真正的檔案。
+本模組為「資料存取層」，負責從 `db/` 目錄下的 JSON 資料庫載入
+單字、文法、情境短文／文章與 50 音，並提供統一的存取介面。
 
-每一筆單字資料皆包含：
+資料庫結構（每個級別一個檔案）：
+    db/N5.json, db/N4.json, db/N3.json, db/N2.json, db/N1.json
+        {
+          "level": "N5",
+          "vocab":    [ {kanji, kana, romaji, chinese, pos, grammar, usage,
+                          examples:[{jp, kana, zh}, ...]}, ... ],
+          "grammar":  [ {point, meaning, usage,
+                          examples:[{jp, kana, zh}, ...]}, ... ],
+          "passages": [ {title, type("短文"/"文章"),
+                          sentences:[{jp, kana, zh}, ...]}, ... ]
+        }
+    db/gojuon.json  →  {seion, dakuon, handakuon, yoon}
+
+每一筆單字皆含：
     level   : 級別 (N1 ~ N5)
     kanji   : 日文漢字
-    kana    : 假名
+    kana    : 假名（唸法）
     romaji  : 羅馬拼音
     chinese : 中文翻譯
     grammar : 該單字搭配的核心文法重點
+    usage   : 使用方式說明（單字如何用）
+    examples: 例句清單（每句含 jp 日文、kana 唸法、zh 中文）
+
+存取一律透過 load_vocab / load_grammar / load_passages / load_gojuon，
+禁止外部直接讀取私有快取。
 """
 
+import json
+import os
+from functools import lru_cache
 from typing import Dict, List
+
+# 資料庫目錄（與本檔同層的 db/）
+_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "db")
+
 
 # ---------------------------------------------------------------------------
 # 級別中繼資料：顯示名稱、主題色、簡介
@@ -32,200 +57,54 @@ LEVEL_ORDER: List[str] = ["N5", "N4", "N3", "N2", "N1"]
 
 
 # ---------------------------------------------------------------------------
-# 50 音表（僅 N5 基礎使用）
+# 低階載入（含快取，避免重複讀檔）
 # ---------------------------------------------------------------------------
-def _build_gojuon() -> List[Dict[str, str]]:
-    """產生 50 音清音對照表。"""
-    rows = [
-        # (假名, 羅馬拼音)
-        ("あ", "a"), ("い", "i"), ("う", "u"), ("え", "e"), ("お", "o"),
-        ("か", "ka"), ("き", "ki"), ("く", "ku"), ("け", "ke"), ("こ", "ko"),
-        ("さ", "sa"), ("し", "shi"), ("す", "su"), ("せ", "se"), ("そ", "so"),
-        ("た", "ta"), ("ち", "chi"), ("つ", "tsu"), ("て", "te"), ("と", "to"),
-        ("な", "na"), ("に", "ni"), ("ぬ", "nu"), ("ね", "ne"), ("の", "no"),
-        ("は", "ha"), ("ひ", "hi"), ("ふ", "fu"), ("へ", "he"), ("ほ", "ho"),
-        ("ま", "ma"), ("み", "mi"), ("む", "mu"), ("め", "me"), ("も", "mo"),
-        ("や", "ya"), ("ゆ", "yu"), ("よ", "yo"),
-        ("ら", "ra"), ("り", "ri"), ("る", "ru"), ("れ", "re"), ("ろ", "ro"),
-        ("わ", "wa"), ("を", "wo"), ("ん", "n"),
-    ]
-    return [{"kana": k, "romaji": r} for k, r in rows]
+@lru_cache(maxsize=None)
+def _load_json(filename: str) -> dict:
+    """讀取 db/ 下的單一 JSON 檔；找不到時回傳空 dict。"""
+    path = os.path.join(_DB_DIR, filename)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as fp:
+        return json.load(fp)
 
 
-GOJUON: List[Dict[str, str]] = _build_gojuon()
+@lru_cache(maxsize=None)
+def _load_level(level: str) -> dict:
+    """載入指定級別的完整資料（vocab / grammar / passages）。"""
+    return _load_json(f"{level}.json")
 
 
 # ---------------------------------------------------------------------------
-# 單字資料庫（模擬 JSON 來源）
+# 公開存取介面
 # ---------------------------------------------------------------------------
-_RAW_VOCAB: Dict[str, List[Dict[str, str]]] = {
-    "N5": [
-        {"kanji": "私", "kana": "わたし", "romaji": "watashi", "chinese": "我",
-         "grammar": "「私は〜です」表示自我介紹的基本判斷句。"},
-        {"kanji": "学生", "kana": "がくせい", "romaji": "gakusei", "chinese": "學生",
-         "grammar": "名詞 +「です」構成禮貌肯定句。"},
-        {"kanji": "食べる", "kana": "たべる", "romaji": "taberu", "chinese": "吃",
-         "grammar": "一段動詞，ます形為「食べます」。"},
-        {"kanji": "水", "kana": "みず", "romaji": "mizu", "chinese": "水",
-         "grammar": "「〜を飲みます」表示喝某物，を 為受詞助詞。"},
-        {"kanji": "行く", "kana": "いく", "romaji": "iku", "chinese": "去",
-         "grammar": "「〜へ行きます」表示移動方向，へ 讀作 e。"},
-    ],
-    "N4": [
-        {"kanji": "趣味", "kana": "しゅみ", "romaji": "shumi", "chinese": "興趣",
-         "grammar": "「〜のが好きです」表示喜歡做某事。"},
-        {"kanji": "予約", "kana": "よやく", "romaji": "yoyaku", "chinese": "預約",
-         "grammar": "「〜ておきます」表示事先做好準備。"},
-        {"kanji": "経験", "kana": "けいけん", "romaji": "keiken", "chinese": "經驗",
-         "grammar": "「〜たことがあります」表示曾經有過的經驗。"},
-        {"kanji": "説明", "kana": "せつめい", "romaji": "setsumei", "chinese": "說明",
-         "grammar": "「〜てくれます」表示他人為我做某事。"},
-        {"kanji": "準備", "kana": "じゅんび", "romaji": "junbi", "chinese": "準備",
-         "grammar": "「〜なければなりません」表示必須做某事。"},
-    ],
-    "N3": [
-        {"kanji": "影響", "kana": "えいきょう", "romaji": "eikyou", "chinese": "影響",
-         "grammar": "「〜によって」表示依據、根據或被動的施動者。"},
-        {"kanji": "解決", "kana": "かいけつ", "romaji": "kaiketsu", "chinese": "解決",
-         "grammar": "「〜ようとする」表示嘗試、努力去做某事。"},
-        {"kanji": "現象", "kana": "げんしょう", "romaji": "genshou", "chinese": "現象",
-         "grammar": "「〜わけだ」表示依理推論得出的結論。"},
-        {"kanji": "判断", "kana": "はんだん", "romaji": "handan", "chinese": "判斷",
-         "grammar": "「〜に基づいて」表示以某事為基礎、依據。"},
-        {"kanji": "提案", "kana": "ていあん", "romaji": "teian", "chinese": "提案",
-         "grammar": "「〜たらどうですか」用於委婉提出建議。"},
-    ],
-    "N2": [
-        {"kanji": "傾向", "kana": "けいこう", "romaji": "keikou", "chinese": "傾向",
-         "grammar": "「〜つつある」表示某狀態正持續變化進行中。"},
-        {"kanji": "矛盾", "kana": "むじゅん", "romaji": "mujun", "chinese": "矛盾",
-         "grammar": "「〜にもかかわらず」表示儘管前述事實仍然如何。"},
-        {"kanji": "効率", "kana": "こうりつ", "romaji": "kouritsu", "chinese": "效率",
-         "grammar": "「〜を通じて」表示透過某媒介或在整個期間。"},
-        {"kanji": "概念", "kana": "がいねん", "romaji": "gainen", "chinese": "概念",
-         "grammar": "「〜というものだ」表示對事物本質的概括說明。"},
-        {"kanji": "促進", "kana": "そくしん", "romaji": "sokushin", "chinese": "促進",
-         "grammar": "「〜に伴って」表示隨著某事的發生而連帶變化。"},
-    ],
-    "N1": [
-        {"kanji": "葛藤", "kana": "かっとう", "romaji": "kattou", "chinese": "糾葛、內心衝突",
-         "grammar": "「〜を余儀なくされる」表示不得已被迫處於某境地。"},
-        {"kanji": "前提", "kana": "ぜんてい", "romaji": "zentei", "chinese": "前提",
-         "grammar": "「〜をもって」表示以某時點或手段（正式書面語）。"},
-        {"kanji": "顕著", "kana": "けんちょ", "romaji": "kencho", "chinese": "顯著",
-         "grammar": "「〜きらいがある」表示有某種（負面）傾向。"},
-        {"kanji": "媒介", "kana": "ばいかい", "romaji": "baikai", "chinese": "媒介",
-         "grammar": "「〜を介して」表示透過某中介，較書面正式。"},
-        {"kanji": "踏襲", "kana": "とうしゅう", "romaji": "toushuu", "chinese": "沿襲、承襲",
-         "grammar": "「〜にとどまらず」表示不僅限於前項，範圍更廣。"},
-    ],
-}
-
-
-# ---------------------------------------------------------------------------
-# 文法解說核心（模擬 JSON 來源）
-# ---------------------------------------------------------------------------
-_RAW_GRAMMAR: Dict[str, List[Dict[str, str]]] = {
-    "N5": [
-        {"point": "〜は〜です", "meaning": "「A 是 B」的基本判斷句。",
-         "example": "私は学生です。", "example_zh": "我是學生。"},
-        {"point": "〜を〜ます", "meaning": "を 標記動作的受詞（對象）。",
-         "example": "水を飲みます。", "example_zh": "喝水。"},
-        {"point": "〜へ行きます", "meaning": "へ 標記移動的方向。",
-         "example": "学校へ行きます。", "example_zh": "去學校。"},
-    ],
-    "N4": [
-        {"point": "〜たことがあります", "meaning": "表示過去的經驗。",
-         "example": "日本へ行ったことがあります。", "example_zh": "我去過日本。"},
-        {"point": "〜なければなりません", "meaning": "表示義務、必須。",
-         "example": "毎日勉強しなければなりません。", "example_zh": "每天都必須讀書。"},
-        {"point": "〜ておきます", "meaning": "表示事先做好準備。",
-         "example": "旅行の前に予約しておきます。", "example_zh": "旅行前先預約好。"},
-    ],
-    "N3": [
-        {"point": "〜によって", "meaning": "依據、因應、被動施動者。",
-         "example": "人によって考え方が違う。", "example_zh": "依不同的人想法各異。"},
-        {"point": "〜わけだ", "meaning": "依理推論而得的結論。",
-         "example": "三年も住んでいたから、日本語が上手なわけだ。",
-         "example_zh": "住了三年，難怪日語很好。"},
-        {"point": "〜に基づいて", "meaning": "以某事為基礎、依據。",
-         "example": "データに基づいて判断する。", "example_zh": "根據數據來判斷。"},
-    ],
-    "N2": [
-        {"point": "〜にもかかわらず", "meaning": "儘管…卻…（逆接）。",
-         "example": "努力したにもかかわらず、失敗した。",
-         "example_zh": "儘管努力了，還是失敗了。"},
-        {"point": "〜つつある", "meaning": "正持續朝某方向變化。",
-         "example": "景気は回復しつつある。", "example_zh": "景氣正逐漸恢復中。"},
-        {"point": "〜に伴って", "meaning": "隨著…而連帶變化。",
-         "example": "人口の増加に伴って問題が増える。",
-         "example_zh": "隨著人口增加，問題也隨之增多。"},
-    ],
-    "N1": [
-        {"point": "〜を余儀なくされる", "meaning": "被迫、不得已陷入某境地。",
-         "example": "台風で中止を余儀なくされた。",
-         "example_zh": "因颱風被迫中止。"},
-        {"point": "〜にとどまらず", "meaning": "不僅限於…，範圍更廣。",
-         "example": "影響は国内にとどまらず、世界に及んだ。",
-         "example_zh": "影響不僅限於國內，更波及全世界。"},
-        {"point": "〜をもって", "meaning": "以某時點／手段（正式書面語）。",
-         "example": "本日をもって閉店いたします。",
-         "example_zh": "本店自今日起結束營業。"},
-    ],
-}
-
-
-# ---------------------------------------------------------------------------
-# 情境短文與進級（模擬 JSON 來源）
-# ---------------------------------------------------------------------------
-_RAW_PASSAGES: Dict[str, Dict[str, str]] = {
-    "N5": {
-        "title": "自己紹介（自我介紹）",
-        "japanese": "はじめまして。私は陳です。台湾から来ました。学生です。どうぞよろしくお願いします。",
-        "chinese": "初次見面，我姓陳，來自台灣，是學生。請多多指教。",
-    },
-    "N4": {
-        "title": "旅行の計画（旅行計畫）",
-        "japanese": "来月、友達と日本へ旅行に行きます。ホテルはもう予約しておきました。京都へ行ったことがないので、とても楽しみです。",
-        "chinese": "下個月要和朋友去日本旅行。飯店已經預約好了。因為沒去過京都，所以非常期待。",
-    },
-    "N3": {
-        "title": "環境問題（環境議題）",
-        "japanese": "近年、気候変動の影響によって、さまざまな自然現象が起きている。データに基づいて、私たちは早めに対策を取らなければならないわけだ。",
-        "chinese": "近年來，因氣候變遷的影響，發生了各種自然現象。根據數據，我們理應及早採取對策。",
-    },
-    "N2": {
-        "title": "働き方の変化（工作型態的變化）",
-        "japanese": "技術の進歩に伴って、在宅勤務が増えつつある。通勤時間が減ったにもかかわらず、コミュニケーションの効率という新たな課題も生まれている。",
-        "chinese": "隨著技術進步，在家工作正逐漸增加。儘管通勤時間減少了，卻也產生了溝通效率這項新課題。",
-    },
-    "N1": {
-        "title": "伝統と革新（傳統與革新）",
-        "japanese": "老舗企業は、長年の伝統を踏襲するにとどまらず、時代の変化に応じた革新を求められている。両者の葛藤を乗り越えることをもって、真の持続可能性が実現されるのだ。",
-        "chinese": "老字號企業不僅要承襲多年傳統，更被要求因應時代變化進行革新。唯有跨越兩者間的糾葛，才能實現真正的永續性。",
-    },
-}
-
-
-# ---------------------------------------------------------------------------
-# 公開存取介面（模擬 JSON 載入函式；可改為讀取實體檔案）
-# ---------------------------------------------------------------------------
-def load_vocab(level: str) -> List[Dict[str, str]]:
+def load_vocab(level: str) -> List[Dict]:
     """載入指定級別的單字清單，並補上 level 欄位。"""
-    return [{"level": level, **item} for item in _RAW_VOCAB.get(level, [])]
+    data = _load_level(level)
+    return [{"level": level, **item} for item in data.get("vocab", [])]
 
 
-def load_grammar(level: str) -> List[Dict[str, str]]:
+def load_grammar(level: str) -> List[Dict]:
     """載入指定級別的核心文法清單。"""
-    return [{"level": level, **item} for item in _RAW_GRAMMAR.get(level, [])]
+    data = _load_level(level)
+    return [{"level": level, **item} for item in data.get("grammar", [])]
 
 
-def load_passage(level: str) -> Dict[str, str]:
-    """載入指定級別的情境短文。"""
-    passage = _RAW_PASSAGES.get(level, {})
-    return {"level": level, **passage}
+def load_passages(level: str) -> List[Dict]:
+    """載入指定級別的情境短文／文章清單（可能多篇）。"""
+    data = _load_level(level)
+    return [{"level": level, **item} for item in data.get("passages", [])]
 
 
-def load_gojuon() -> List[Dict[str, str]]:
-    """載入 50 音表（基礎，N5 專用）。"""
-    return list(GOJUON)
+def load_passage(level: str) -> Dict:
+    """（相容介面）載入指定級別的第一篇短文。"""
+    passages = load_passages(level)
+    return passages[0] if passages else {"level": level}
+
+
+def load_gojuon() -> Dict[str, List[Dict[str, str]]]:
+    """
+    載入 50 音表（基礎，N5 專用）。
+    回傳含 seion / dakuon / handakuon / yoon 四組的字典。
+    """
+    return _load_json("gojuon.json")
