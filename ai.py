@@ -525,7 +525,25 @@ def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
     try:
         req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as r:
-            sha = json.loads(r.read()).get("sha")
+            current = json.loads(r.read())
+        sha = current.get("sha")
+        # 與遠端現有內容聯集，避免覆蓋造成倒退流失（list 依 id/title 去重、dict 直接合併）
+        try:
+            remote = json.loads(base64.b64decode(current.get("content", "")).decode("utf-8"))
+            new = json.loads(payload_json)
+            if isinstance(remote, list) and isinstance(new, list):
+                seen, union = set(), []
+                for item in remote + new:
+                    key = (item.get("id") or item.get("title")) if isinstance(item, dict) else item
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    union.append(item)
+                payload_json = json.dumps(union, ensure_ascii=False, indent=2) + "\n"
+            elif isinstance(remote, dict) and isinstance(new, dict):
+                payload_json = json.dumps({**remote, **new}, ensure_ascii=False, indent=2) + "\n"
+        except Exception:  # noqa: BLE001
+            pass
     except Exception:  # noqa: BLE001 - 404 = 首次建立
         sha = None
     body = {"message": commit_msg,
@@ -610,7 +628,16 @@ def push_bank_to_github(merged: dict, silent: bool = False):
     try:
         req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as r:
-            sha = json.loads(r.read())["sha"]
+            current = json.loads(r.read())
+        sha = current["sha"]
+        # 與遠端現有 vocab_bank 聯集，避免用較舊本機檔覆蓋造成字數倒退流失。
+        try:
+            remote = json.loads(base64.b64decode(current.get("content", "")).decode("utf-8"))
+            if isinstance(remote, dict):
+                merged = {**remote, **merged}  # 遠端為底，本機/session 疊上 → 只增不減
+                payload_json = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
+        except Exception:  # noqa: BLE001
+            pass
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:600]
         # 檔案還沒建立（分支存在但無此檔）→ 視為首次建立，繼續走 PUT。
