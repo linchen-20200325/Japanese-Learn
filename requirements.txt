@@ -1,4 +1,3 @@
 streamlit>=1.32
 gTTS>=2.5
-# 選用：執行 scripts/generate_content.py 批次擴充單字時才需要
-# anthropic>=0.40
+google-genai>=0.3

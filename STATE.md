@@ -16,24 +16,25 @@
 ## 📁 核心檔案
 | 檔案 | 角色 | 狀態 |
 |------|------|------|
-| `app.py` | Streamlit 主程式（7 功能：儀表板／智慧複習／50音／單字／文法／短文／分級閱讀） | ✅ 已完成 |
-| `data.py` | 資料存取層（從 `db/` 載入 JSON，含快取；新增 `load_reading`） | ✅ 已完成 |
-| `srs.py` | **科學間隔重複引擎（SM-2）**：排程、掌握度、保留率、複習佇列、預測 | ✅ 已完成 |
-| `store.py` | **學習進度層**：卡片牌組建立、JSON 持久化、連續天數、統計 | ✅ 已完成 |
+| `app.py` | Streamlit 主程式（7 功能：50音／核心單字庫／單字卡／文法／💬情境會話／AI互動閱讀／單字庫／複習） | ✅ 已完成 |
+| `ai.py` | Gemini 互動層（多金鑰輪轉、主題式生成、vocab_bank 讀寫與 GitHub 推回） | ✅ 已完成 |
+| `data.py` | 資料存取層（從 `db/` 載入 JSON，含快取） | ✅ 已完成 |
 | `db/N1.json`～`db/N5.json` | 各級別資料庫（單字／文法／短文／文章） | ✅ 已完成 |
-| `db/reading.json` | **分級閱讀文章 + 閱讀理解測驗（N1~N5）** | ✅ 已完成 |
 | `db/gojuon.json` | 50 音資料庫（清音／濁音／半濁音／拗音） | ✅ 已完成 |
-| `scripts/generate_content.py` | **用 Claude API 批次擴充單字庫（離線工具，冪等）** | ✅ 已完成 |
-| `requirements.txt` | 相依套件（streamlit、gTTS） | ✅ 已完成 |
-| `.gitignore` | 排除 `__pycache__`、`.pyc`、venv、`progress.json` | ✅ 已完成 |
-| `CLAUDE.md` | 核心開發協議 v2.0 | ✅ 已完成 |
-| `STATE.md` | 本戰情室文件 | ✅ 已完成 |
+| `vocab_bank.json` | AI 生成的大單字庫（Gemini 批次生成，可推回 repo 永久保存） | ✅ 已完成 |
+| `scripts/generate_vocab.py` | 本機批次生成單字（讀 `vocab_wordlist.txt`） | ✅ 已完成 |
+| `requirements.txt` | 相依套件（streamlit、gTTS、google-genai） | ✅ 已完成 |
+| `CLAUDE.md` / `STATE.md` | 開發協議 / 本戰情室 | ✅ 已完成 |
 
-## 🧠 科學學習引擎（本次新增）
-- **SRS 智慧複習**（`srs.py`）：SM-2 演算法，三鍵評分（忘記／普通／簡單）自動排下次出現；主動回憶（先翻面再評分）。
-- **學習儀表板**（`page_dashboard`）：連續天數、今日待複習、記憶保留率、掌握度分布（未學／學習中／漸熟／已掌握）、未來 7 天複習預測、各級別進度條。
-- **進度持久化**（`store.py`）：本機寫 `progress.json`；雲端透過儀表板「下載／上傳備份」長期保存（解決 Streamlit Cloud 暫存檔重置）。
-- **分級閱讀**（`page_reading`）：真正的多段文章，可整篇朗讀、逐句假名/中文、盲讀挑戰，讀後做閱讀理解選擇題並即時批改。
+## 🔀 本次整併（以最新版 AI App 為底）
+- **三合一**：原「情境短文與進級／🤖 AI 情境生成／🗣️ AI 生活對話」三個重複功能，
+  合併為單一「💬 情境會話」（`page_scenario`），底下分頁：📄 範例短文（免金鑰）／🗣️ AI 生活對話／🤖 AI 情境心智圖。
+- **修正「資料庫不會更新」bug**：AI 生成單字推回 GitHub 成功後，原本只清 `live_bank`、
+  未寫回本機 `vocab_bank.json`，導致畫面停在舊字數。現於 `_record_push` 推回成功時
+  同步寫回本機並清快取，字數即時更新（與英文版同因同修）。
+- **核心單字擴充**：N5 12→24、N4 10→24、N3 10→22（保留並沿用）。
+- 主題式生成已內建於 `ai.py`（`gen_dialogue` / `gen_reading` / `generate_material`），
+  多把 Gemini 金鑰自動輪轉，金鑰請貼到 Streamlit Cloud → Settings → Secrets（勿入 repo）。
 
 ## 🗂️ 資料庫結構（db/）
 - 每個級別一個 JSON 檔，內含三大區塊：
@@ -43,16 +44,17 @@
 - `db/gojuon.json`：50 音四組（seion／dakuon／handakuon／yoon）。
 - 未來可擴充為真正的外部資料庫或後台 API，`data.py` 介面不變。
 
-## 📦 目前資料量
-| 級別 | 單字 | 文法 | 短文/文章 | 分級閱讀 |
-|------|------|------|-----------|----------|
-| N5 | 24 | 6 | 3 | 2 |
-| N4 | 24 | 6 | 3 | 2 |
-| N3 | 22 | 6 | 3 | 2 |
-| N2 | 10 | 6 | 3 | 1 |
-| N1 | 10 | 6 | 3 | 1 |
+## 📦 目前資料量（核心 db）
+| 級別 | 單字 | 文法 | 短文/文章 |
+|------|------|------|-----------|
+| N5 | 24 | 6 | 3 |
+| N4 | 24 | 6 | 3 |
+| N3 | 22 | 6 | 3 |
+| N2 | 10 | 6 | 3 |
+| N1 | 10 | 6 | 3 |
 
-> 持續擴充：可執行 `python scripts/generate_content.py --level N3 --count 30` 用 Claude API 批次擴充。
+> 另有 `vocab_bank.json`（AI 生成）可無上限擴充：App 內「📖 單字庫」按「開始生成」，
+> 或本機跑 `python scripts/generate_vocab.py`。
 
 ## ✅ 已完成進度
 - [x] 資料層改為 `db/` JSON 資料庫，`data.py` 負責載入（`lru_cache` 快取）。

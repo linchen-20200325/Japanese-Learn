@@ -108,16 +108,3 @@ def load_gojuon() -> Dict[str, List[Dict[str, str]]]:
     回傳含 seion / dakuon / handakuon / yoon 四組的字典。
     """
     return _load_json("gojuon.json")
-
-
-def load_reading(level: str) -> List[Dict]:
-    """
-    載入指定級別的分級閱讀文章（含逐句假名／中文與閱讀理解題）。
-
-    每篇文章結構：
-        {title, title_zh, type, minutes,
-         sentences:[{jp, kana, zh}, ...],
-         questions:[{q, options:[...], answer, explain}, ...]}
-    """
-    data = _load_json("reading.json")
-    return [{"level": level, **item} for item in data.get(level, [])]
