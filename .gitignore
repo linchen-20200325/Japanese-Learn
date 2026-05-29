@@ -3,4 +3,7 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+
+# 執行期產生的學習進度／複習卡（雲端為暫存，重新部署會重置）
+progress.json
 dashboard_data.json

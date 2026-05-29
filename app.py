@@ -395,6 +395,47 @@ def due_count() -> int:
 
 
 # ===========================================================================
+# 科學學習監督：依間隔重複(SRS)狀態分析記憶強度
+# ===========================================================================
+def card_mastery(card: dict) -> str:
+    """依複習次數與間隔判斷記憶強度：new / learning / young / mature。"""
+    if card.get("reps", 0) == 0:
+        return "new"
+    interval = card.get("interval", 0)
+    if interval >= 21:
+        return "mature"
+    if interval >= 7:
+        return "young"
+    return "learning"
+
+
+def mastery_distribution() -> dict:
+    """統計複習牌組各記憶強度的卡片數。"""
+    dist = {"new": 0, "learning": 0, "young": 0, "mature": 0}
+    for c in st.session_state.app_data.get("review_cards", []):
+        dist[card_mastery(c)] = dist.get(card_mastery(c), 0) + 1
+    return dist
+
+
+def review_forecast(days: int = 7) -> dict:
+    """未來 days 天每天到期的卡片數（逾期算今天），供複習負擔預測。"""
+    today = date.today()
+    labels = [(today + timedelta(days=i)).strftime("%m/%d") for i in range(days)]
+    counts = dict.fromkeys(labels, 0)
+    for c in st.session_state.app_data.get("review_cards", []):
+        try:
+            due = date.fromisoformat(c.get("due", today_str()))
+        except ValueError:
+            continue
+        delta = (due - today).days
+        if delta < 0:
+            counts[labels[0]] += 1
+        elif delta < days:
+            counts[labels[delta]] += 1
+    return counts
+
+
+# ===========================================================================
 # Mermaid 心智圖渲染
 # ===========================================================================
 _MERMAID_HTML = """
@@ -715,7 +756,7 @@ def page_vocab_bank(level: str) -> None:
                         disabled=not ai.get_github_token() or not live_bank,
                         use_container_width=True):
             ok, info = ai.push_bank_to_github(bank)
-            _record_push(ok, info)
+            _record_push(ok, info, merged=bank)
             st.rerun()
 
     if not bank:
@@ -774,12 +815,27 @@ def page_vocab_bank(level: str) -> None:
                 c2.caption(f"💡 {e['usage_zh']}")
 
 
-def _record_push(ok: bool, info: dict) -> None:
-    """記錄推回結果到 session，供 UI 顯示。"""
+def _record_push(ok: bool, info: dict, merged: dict | None = None) -> None:
+    """記錄推回結果到 session，供 UI 顯示。
+
+    推回成功時，除了清空 live_bank，必須把合併結果同步寫回「本機」vocab_bank.json，
+    否則本機檔仍是部署當下的舊版，畫面會誤顯示舊字數（使用者回報的「資料庫不會更新」）。
+    寫本機後清快取，load_vocab_bank 立即讀到新字數，遠端與本機一致。
+    """
     import datetime as _dt
     st.session_state["_last_push"] = {"ok": ok, "ts": _dt.datetime.now().strftime("%H:%M:%S")}
     if ok:
         st.session_state.pop("_push_error", None)
+        if merged is not None:
+            try:
+                with open(ai.VOCAB_BANK_FILE, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+                if hasattr(ai.load_vocab_bank, "clear"):
+                    ai.load_vocab_bank.clear()
+                if hasattr(ai._load_vocab_bank_cached, "clear"):
+                    ai._load_vocab_bank_cached.clear()
+            except OSError:
+                pass
         st.session_state["live_bank"] = {}
     else:
         st.session_state["_push_error"] = info
@@ -814,8 +870,9 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     st.success(f"✅ 已生成 {added} 字：{'、'.join(new_words[:10])}"
                f"{' …' if len(new_words) > 10 else ''}")
     if auto_push and added:
-        ok, info = ai.push_bank_to_github({**file_bank, **live})
-        _record_push(ok, info)
+        merged = {**file_bank, **live}
+        ok, info = ai.push_bank_to_github(merged)
+        _record_push(ok, info, merged=merged)
         if not ok:
             st.error(f"⚠️ 這批 {added} 字推回失敗，只留在 session，重整就消失！請手動下載 JSON。")
 
@@ -881,6 +938,46 @@ def page_review() -> None:
         save_data()
         st.session_state.pop("review_reveal_id", None)
         st.rerun()
+
+
+# ===========================================================================
+# 📊 學習儀表板（科學監督：記憶強度、複習負擔預測）
+# ===========================================================================
+def page_dashboard(level: str) -> None:
+    st.header("📊 學習儀表板")
+    st.caption("用間隔重複（SRS）追蹤你的記憶狀態：今日待複習、記憶強度分布、未來複習負擔。")
+
+    deck = st.session_state.app_data.get("review_cards", [])
+    if not deck:
+        st.info("複習牌組是空的。到「💬 情境會話」或「📚 AI 互動閱讀」把句卡「加入複習」，"
+                "系統就會用間隔重複幫你科學排程並在這裡呈現記憶分析。")
+        return
+
+    dist = mastery_distribution()
+    total = len(deck)
+    mature = dist["young"] + dist["mature"]
+    today = today_str()
+    studied = sum(1 for c in deck if c.get("reps", 0) > 0)
+    reviews_total = sum(c.get("reps", 0) for c in deck)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🃏 複習卡總數", total)
+    c2.metric("📅 今日待複習", due_count())
+    c3.metric("🌳 已熟（漸熟+掌握）", mature)
+    c4.metric("💪 熟練比例", f"{int(mature / total * 100) if total else 0}%")
+
+    st.divider()
+    st.subheader("🎯 記憶強度分布")
+    labels = {"new": "🆕 新卡", "learning": "📖 學習中（<7天）",
+              "young": "🌱 漸熟（7–20天）", "mature": "🌳 已掌握（≥21天）"}
+    mc = st.columns(4)
+    for col, k in zip(mc, ["new", "learning", "young", "mature"]):
+        col.metric(labels[k], dist.get(k, 0))
+    st.caption(f"已開始複習 {studied}／{total} 張　·　累計複習次數 {reviews_total}")
+
+    st.subheader("📈 未來 7 天複習負擔預測")
+    st.caption("提早知道哪天卡片會堆積，方便分配每天的學習時間。")
+    st.bar_chart({"到期張數": review_forecast(7)}, height=240)
 
 
 # ===========================================================================
@@ -1081,6 +1178,29 @@ def render_ai_sidebar() -> None:
 
 
 # ===========================================================================
+# 💬 情境會話（三合一：範例短文 + AI 生活對話 + AI 情境心智圖）
+# ===========================================================================
+def page_scenario(level: str) -> None:
+    """整合原「情境短文與進級／AI 情境生成／AI 生活對話」三個重複功能為單一入口。
+
+    以分頁呈現：免金鑰的靜態範例短文打底，AI 對話與情境心智圖為可選擴充
+    （需 Gemini 金鑰）。三者皆與「同一情境學習」相關，合併後介面更乾淨。
+    """
+    st.header(f"💬 {data.LEVELS[level]['label']} 情境會話")
+    st.caption("同一情境的三種學法：先讀範例短文打底，再用 AI 依主題生成生活對話或情境心智圖。")
+
+    tab_passage, tab_dialogue, tab_mindmap = st.tabs(
+        ["📄 範例短文（免金鑰）", "🗣️ AI 生活對話", "🤖 AI 情境心智圖"]
+    )
+    with tab_passage:
+        page_passage(level)
+    with tab_dialogue:
+        page_ai_dialogue(level)
+    with tab_mindmap:
+        page_ai_generate(level)
+
+
+# ===========================================================================
 # 主程式
 # ===========================================================================
 def main() -> None:
@@ -1103,12 +1223,11 @@ def main() -> None:
     st.sidebar.markdown("### 第二層：功能切換")
 
     # 50 音為基礎功能，僅在 N5 顯示；其餘級別隱藏，保持介面乾淨。
-    functions = []
+    functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "情境短文與進級",
-                  "🤖 AI 情境生成", "🗣️ AI 生活對話", "📚 AI 互動閱讀",
-                  "📖 單字庫", "🔁 複習"]
+    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
+                  "💬 情境會話", "📚 AI 互動閱讀", "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1134,7 +1253,9 @@ def main() -> None:
     st.divider()
 
     # ---------------- 功能分派（內容依級別動態切換）----------------
-    if feature == "50音":
+    if feature == "📊 學習儀表板":
+        page_dashboard(level)
+    elif feature == "50音":
         page_gojuon(level)
     elif feature == "核心單字庫":
         page_vocab(level)
@@ -1142,12 +1263,8 @@ def main() -> None:
         page_flashcards(level)
     elif feature == "文法解說核心":
         page_grammar(level)
-    elif feature == "情境短文與進級":
-        page_passage(level)
-    elif feature == "🤖 AI 情境生成":
-        page_ai_generate(level)
-    elif feature == "🗣️ AI 生活對話":
-        page_ai_dialogue(level)
+    elif feature == "💬 情境會話":
+        page_scenario(level)
     elif feature == "📚 AI 互動閱讀":
         page_ai_reading(level)
     elif feature == "📖 單字庫":
