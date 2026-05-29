@@ -15,12 +15,16 @@ app.py — JLPT 全階段日文學習 App（N1 ~ N5）
     streamlit run app.py
 """
 
+import datetime
+import json
 import random
 from io import BytesIO
 
 import streamlit as st
 
 import data
+import srs
+import store
 
 # gTTS 為選用相依套件；若未安裝則優雅降級（停用語音，不中斷程式）。
 try:
@@ -90,6 +94,14 @@ def init_state() -> None:
         st.session_state.quiz = {
             lv: {"correct": 0, "total": 0} for lv in data.LEVEL_ORDER
         }
+    if "srs_store" not in st.session_state:
+        # SRS 間隔重複進度（跨級別），啟動時嘗試從本機 progress.json 載入
+        st.session_state.srs_store = store.load_store()
+
+
+def save_progress() -> None:
+    """將 SRS 進度寫回本機（雲端暫存環境失敗時靜默忽略，改用匯出備份）。"""
+    store.save_store(st.session_state.srs_store)
 
 
 def mark_learned(level: str, kanji: str) -> None:
@@ -305,6 +317,241 @@ def _new_question(vocab: list) -> dict:
 
 
 # ===========================================================================
+# 📊 學習儀表板（科學學習監督：跨級別總覽）
+# ===========================================================================
+def page_dashboard(level: str) -> None:
+    st.header("📊 學習儀表板")
+    st.caption("以間隔重複（SRS）追蹤記憶狀態：今日待複習、保留率、連續天數與掌握度分布。")
+
+    s = st.session_state.srs_store
+    ov = store.overall_stats(s)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🔥 連續天數", f"{ov['streak']} 天")
+    c2.metric("📅 今日待複習", f"{ov['due_today']} 張")
+    c3.metric("✅ 已學卡片", f"{ov['studied']} / {ov['catalog_total']}")
+    ret = ov["retention"]
+    c4.metric("🧠 記憶保留率", "—" if ret is None else f"{ret:.0%}")
+
+    st.divider()
+
+    # 掌握度分布
+    st.subheader("🎯 掌握度分布")
+    m = ov["mastery"]
+    labels = {"new": "🆕 未學", "learning": "📖 學習中",
+              "young": "🌱 漸熟", "mature": "🌳 已掌握"}
+    cols = st.columns(4)
+    for col, key in zip(cols, ["new", "learning", "young", "mature"]):
+        col.metric(labels[key], m.get(key, 0))
+
+    # 未來 7 天複習預測
+    st.subheader("📈 未來 7 天複習預測")
+    fc = srs.forecast(list(s["cards"].values()), days=7)
+    today = datetime.date.today()
+    day_labels = [(today + datetime.timedelta(days=i)).strftime("%m/%d")
+                  for i in range(7)]
+    st.bar_chart({"到期張數": dict(zip(day_labels, fc))})
+
+    # 各級別進度條
+    st.subheader("📚 各級別掌握進度")
+    for lv in data.LEVEL_ORDER:
+        ls = store.level_stats(s, lv)
+        mastered = ls["young"] + ls["mature"]
+        total = ls["total"] or 1
+        st.write(
+            f"**{data.LEVELS[lv]['label']}**："
+            f"已學 {ls['studied']}／{ls['total']}　|　"
+            f"熟練 {mastered}　|　今日到期 {ls['due']}"
+        )
+        st.progress(mastered / total)
+
+    st.divider()
+    _backup_controls()
+
+
+def _backup_controls() -> None:
+    """進度備份：雲端檔案系統為暫存，提供匯出／匯入 JSON 以長期保存。"""
+    st.subheader("💾 進度備份（雲端必備）")
+    st.caption("Streamlit Cloud 重新部署後檔案會重置，請定期下載備份，換裝置時再上傳還原。")
+    col_dl, col_up = st.columns(2)
+    with col_dl:
+        st.download_button(
+            "⬇️ 下載進度備份",
+            data=json.dumps(st.session_state.srs_store, ensure_ascii=False, indent=2),
+            file_name="jlpt_progress.json",
+            mime="application/json",
+        )
+    with col_up:
+        uploaded = st.file_uploader("⬆️ 上傳進度還原", type="json", key="restore")
+        if uploaded is not None:
+            try:
+                loaded = json.load(uploaded)
+                base = store.default_store()
+                base.update(loaded)
+                st.session_state.srs_store = base
+                save_progress()
+                st.success("進度已還原！")
+            except (json.JSONDecodeError, ValueError):
+                st.error("檔案格式錯誤，無法還原。")
+
+
+# ===========================================================================
+# 🔁 智慧複習（SRS：主動回憶 + 間隔重複）
+# ===========================================================================
+def page_review(level: str) -> None:
+    st.header(f"🔁 {data.LEVELS[level]['label']} 智慧複習")
+    st.caption("先回想答案，再翻面評分。系統依間隔重複演算法安排下次出現時間。")
+
+    s = st.session_state.srs_store
+
+    # 設定：今日新卡上限
+    new_limit = st.slider("今日新卡上限", 0, 30, 10, key=f"newlim_{level}",
+                          help="控制每天引入的新單字／文法量，避免負擔過重。")
+
+    # 建立本級別的候選卡：單字 + 文法
+    catalog = store.build_all_cards()
+    level_ids = [(cid, meta) for cid, meta in catalog.items() if meta["level"] == level]
+    # 取得目前排程狀態的卡片清單（含尚未建立的視為新卡）
+    candidate_cards = []
+    for cid, meta in level_ids:
+        card = s["cards"].get(cid) or srs.new_card(cid, meta["type"], level)
+        candidate_cards.append(card)
+
+    session = srs.build_session(candidate_cards, new_limit=new_limit, review_limit=50)
+
+    if not session:
+        st.success("🎉 太棒了！本級別目前沒有到期的複習卡。明天再來吧！")
+        return
+
+    # 目前卡片指標（以 session_state 記住位置）
+    pos_key = f"review_pos_{level}"
+    flip_key = f"review_flip_{level}"
+    if pos_key not in st.session_state:
+        st.session_state[pos_key] = 0
+    if st.session_state[pos_key] >= len(session):
+        st.session_state[pos_key] = 0
+
+    idx = st.session_state[pos_key]
+    card = session[idx]
+    meta = catalog[card["id"]]
+    payload = meta["payload"]
+
+    st.progress((idx) / len(session), text=f"本回合進度 {idx} / {len(session)}")
+
+    badge = "🆕 新卡" if srs.is_new(card) else f"複習第 {card['reviews']+1} 次"
+    st.caption(f"{badge}　|　類型：{'單字' if meta['type']=='vocab' else '文法'}")
+
+    with st.container(border=True):
+        if meta["type"] == "vocab":
+            st.markdown(f"## {payload['kanji']}")
+            play_button(payload["kanji"], key=f"rev_play_{level}_{idx}")
+        else:
+            st.markdown(f"## {payload['point']}")
+
+        if not st.session_state.get(flip_key, False):
+            if st.button("🔄 翻面看答案", key=f"flip_{level}_{idx}", use_container_width=True):
+                st.session_state[flip_key] = True
+                st.rerun()
+        else:
+            if meta["type"] == "vocab":
+                st.markdown(f"**唸法：** {payload['kana']}　|　**羅馬拼音：** {payload['romaji']}")
+                st.markdown(f"**中文：** {payload['chinese']}")
+                if payload.get("usage"):
+                    st.success(f"💡 {payload['usage']}")
+                render_examples(payload.get("examples", [])[:1], key_prefix=f"rev_{level}_{idx}")
+            else:
+                st.markdown(f"**意義：** {payload['meaning']}")
+                if payload.get("usage"):
+                    st.success(f"💡 {payload['usage']}")
+                render_examples(payload.get("examples", [])[:1], key_prefix=f"rev_{level}_{idx}")
+
+            st.markdown("**這張卡你記得多清楚？**")
+            b1, b2, b3 = st.columns(3)
+            if b1.button("😣 忘記", key=f"again_{level}_{idx}", use_container_width=True):
+                _do_grade(card, srs.AGAIN, level)
+            if b2.button("🙂 普通", key=f"good_{level}_{idx}", use_container_width=True):
+                _do_grade(card, srs.GOOD, level)
+            if b3.button("😎 簡單", key=f"easy_{level}_{idx}", use_container_width=True):
+                _do_grade(card, srs.EASY, level)
+
+
+def _do_grade(card: dict, quality: int, level: str) -> None:
+    """評分後更新排程、推進到下一張、存檔。"""
+    meta = store.build_all_cards()[card["id"]]
+    store.review_card(st.session_state.srs_store, card["id"], meta["type"], level, quality)
+    save_progress()
+    st.session_state[f"review_pos_{level}"] += 1
+    st.session_state[f"review_flip_{level}"] = False
+    st.rerun()
+
+
+# ===========================================================================
+# 📰 分級閱讀（真正的閱讀素材 + 閱讀理解）
+# ===========================================================================
+def page_reading(level: str) -> None:
+    st.header(f"📰 {data.LEVELS[level]['label']} 分級閱讀")
+    st.caption("循序漸進的閱讀文章，逐句可顯示假名與中文，讀完做閱讀理解測驗。")
+
+    articles = data.load_reading(level)
+    if not articles:
+        st.info("此級別的分級閱讀文章尚在擴充中。")
+        return
+
+    titles = [f"{a['title']}（{a.get('title_zh','')}・約{a.get('minutes','?')}分）" for a in articles]
+    choice = st.radio("選擇文章：", titles, key=f"reading_pick_{level}")
+    article = articles[titles.index(choice)]
+
+    st.subheader(article["title"])
+    full_text = "".join(s["jp"] for s in article.get("sentences", []))
+    play_button(full_text, key=f"reading_full_{level}", label="🔊 整篇朗讀")
+
+    show_aid = st.toggle("顯示假名與中文（建議先不開，挑戰盲讀）", key=f"reading_aid_{level}")
+
+    for i, sent in enumerate(article.get("sentences", [])):
+        with st.container(border=True):
+            st.markdown(f"#### {sent['jp']}")
+            cols = st.columns([1, 4])
+            with cols[0]:
+                play_button(sent["jp"], key=f"reading_{level}_{i}", label="🔊")
+            if show_aid:
+                st.caption(f"📖 {sent.get('kana','')}")
+                st.caption(f"🇹🇼 {sent.get('zh','')}")
+            else:
+                with st.expander("看假名與中文"):
+                    st.caption(f"📖 {sent.get('kana','')}")
+                    st.caption(f"🇹🇼 {sent.get('zh','')}")
+
+    st.divider()
+    _reading_quiz(article, level)
+
+
+def _reading_quiz(article: dict, level: str) -> None:
+    """閱讀理解測驗：依文章內容回答選擇題。"""
+    questions = article.get("questions", [])
+    if not questions:
+        return
+    st.subheader("🧩 閱讀理解測驗")
+    with st.form(key=f"reading_quiz_{level}_{article['title']}"):
+        answers = []
+        for i, q in enumerate(questions):
+            pick = st.radio(f"Q{i+1}. {q['q']}", q["options"],
+                            key=f"rq_{level}_{i}", index=None)
+            answers.append(pick)
+        submitted = st.form_submit_button("送出作答")
+    if submitted:
+        correct = 0
+        for i, q in enumerate(questions):
+            if answers[i] == q["answer"]:
+                correct += 1
+                st.success(f"Q{i+1} ✅ 正解：{q['answer']}")
+            else:
+                st.error(f"Q{i+1} ❌ 正確答案：{q['answer']}")
+            if q.get("explain"):
+                st.caption(f"💡 {q['explain']}")
+        st.info(f"得分：{correct} / {len(questions)}（{correct/len(questions):.0%}）")
+
+
+# ===========================================================================
 # 主程式
 # ===========================================================================
 def main() -> None:
@@ -327,10 +574,10 @@ def main() -> None:
     st.sidebar.markdown("### 第二層：功能切換")
 
     # 50 音為基礎功能，僅在 N5 顯示；其餘級別隱藏，保持介面乾淨。
-    functions = []
+    functions = ["📊 學習儀表板", "🔁 智慧複習"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "文法解說核心", "情境短文與進級"]
+    functions += ["核心單字庫", "文法解說核心", "情境短文與進級", "📰 分級閱讀"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -352,7 +599,11 @@ def main() -> None:
     st.divider()
 
     # ---------------- 功能分派（內容依級別動態切換）----------------
-    if feature == "50音":
+    if feature == "📊 學習儀表板":
+        page_dashboard(level)
+    elif feature == "🔁 智慧複習":
+        page_review(level)
+    elif feature == "50音":
         page_gojuon(level)
     elif feature == "核心單字庫":
         page_vocab(level)
@@ -360,6 +611,8 @@ def main() -> None:
         page_grammar(level)
     elif feature == "情境短文與進級":
         page_passage(level)
+    elif feature == "📰 分級閱讀":
+        page_reading(level)
 
 
 if __name__ == "__main__":

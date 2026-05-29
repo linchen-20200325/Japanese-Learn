@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 venv/
 .streamlit/secrets.toml
+
+# 執行期產生的學習進度（請用 App 內「下載備份」長期保存）
+progress.json
