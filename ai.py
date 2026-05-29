@@ -175,6 +175,30 @@ READING_GEN_PROMPT = """你是日文閱讀教材編輯。使用者給「主題 +
 """
 
 
+SUBTITLE_GEN_PROMPT = """你是日文影視教學編輯。使用者會貼上一段日文影集／動畫／電影台詞（可能含字幕序號與時間軸，請忽略那些）。
+請把台詞整理成可互動的學習課程，逐句日翻中並標註教學重點（特別是口語、慣用語、語氣詞等教科書學不到的）。
+
+# 嚴格輸出 JSON（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
+{
+  "id": "短英文 id",
+  "title": "日文標題",
+  "title_zh": "繁中標題",
+  "level": "N5 / N4 / N3 / N2 / N1 擇一（依台詞難度）",
+  "summary": "繁中一句話：這段在演什麼、適合學什麼",
+  "sentences": [
+    {"jp": "原台詞（含漢字，口語照舊）", "kana": "整句假名讀音", "zh": "自然繁中翻譯",
+     "vocab": {"単語": "中文翻譯"}, "grammar": "該句口語/文法重點（繁中一句話）"}
+  ]
+}
+
+# 規範
+- 盡量保留原台詞順序與內容，逐句翻譯（過短的可合併）。
+- vocab 著重「影視口語、慣用語、語氣詞、縮約形」。
+- sentences 最多 12 句（台詞太長就取最精華的前段）。
+- 每句務必附 kana 假名，方便學習者朗讀。
+"""
+
+
 DIALOGUE_GEN_PROMPT = """你是日文會話教材編輯。使用者給「情境 + JLPT 級別」，你產出一段自然的生活對話練習。
 
 # 嚴格輸出 JSON（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
@@ -381,6 +405,30 @@ def gen_reading(topic: str, level: str, tier: str) -> dict:
     """呼叫 Gemini 產出一篇可互動日文閱讀（書籍／文章短文）。"""
     text = _llm_generate(READING_GEN_PROMPT, f"主題：{topic}\n級別：{level}",
                          tier, max_tokens=6000)
+    m = re.search(r"\{[\s\S]*\}", text)
+    if not m:
+        raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
+    return json.loads(m.group(0))
+
+
+def clean_subtitle_text(raw: str) -> str:
+    """清理字幕：移除 SRT 序號、時間軸（含 --> 的行）、HTML 標籤與空行。"""
+    out = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if not s or s.isdigit() or "-->" in s:
+            continue
+        s = re.sub(r"<[^>]+>", "", s)
+        if s:
+            out.append(s)
+    return "\n".join(out)
+
+
+def gen_subtitle_lesson(raw_text: str, level: str, tier: str) -> dict:
+    """把貼上的日文台詞／字幕轉成互動學習課程（結構同閱讀條目）。"""
+    cleaned = clean_subtitle_text(raw_text)[:4000]
+    text = _llm_generate(SUBTITLE_GEN_PROMPT,
+                         f"級別參考：{level}\n台詞：\n{cleaned}", tier, max_tokens=6000)
     m = re.search(r"\{[\s\S]*\}", text)
     if not m:
         raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
