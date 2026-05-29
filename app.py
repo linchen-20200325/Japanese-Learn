@@ -949,8 +949,8 @@ def page_dashboard(level: str) -> None:
 
     deck = st.session_state.app_data.get("review_cards", [])
     if not deck:
-        st.info("複習牌組是空的。到「💬 情境會話」或「📚 AI 互動閱讀」把句卡「加入複習」，"
-                "系統就會用間隔重複幫你科學排程並在這裡呈現記憶分析。")
+        st.info("複習牌組是空的。到「💬 情境會話」各分頁（AI 生活對話／情境心智圖／AI 互動閱讀）"
+                "把句卡「加入複習」，系統就會用間隔重複幫你科學排程並在這裡呈現記憶分析。")
         return
 
     dist = mastery_distribution()
@@ -1181,16 +1181,16 @@ def render_ai_sidebar() -> None:
 # 💬 情境會話（三合一：範例短文 + AI 生活對話 + AI 情境心智圖）
 # ===========================================================================
 def page_scenario(level: str) -> None:
-    """整合原「情境短文與進級／AI 情境生成／AI 生活對話」三個重複功能為單一入口。
+    """整合原「情境短文／AI 情境生成／AI 生活對話／AI 互動閱讀」四個重複功能為單一入口。
 
-    以分頁呈現：免金鑰的靜態範例短文打底，AI 對話與情境心智圖為可選擴充
-    （需 Gemini 金鑰）。三者皆與「同一情境學習」相關，合併後介面更乾淨。
+    以分頁呈現：免金鑰的靜態範例短文打底，AI 對話、情境心智圖與互動閱讀
+    為可選擴充（需 Gemini 金鑰）。四者皆屬「同一情境學習」，合併後介面更乾淨。
     """
     st.header(f"💬 {data.LEVELS[level]['label']} 情境會話")
-    st.caption("同一情境的三種學法：先讀範例短文打底，再用 AI 依主題生成生活對話或情境心智圖。")
+    st.caption("同一情境的多種學法：先讀範例短文打底，再用 AI 依主題生成生活對話、情境心智圖或互動閱讀。")
 
-    tab_passage, tab_dialogue, tab_mindmap = st.tabs(
-        ["📄 範例短文（免金鑰）", "🗣️ AI 生活對話", "🤖 AI 情境心智圖"]
+    tab_passage, tab_dialogue, tab_mindmap, tab_reading = st.tabs(
+        ["📄 範例短文（免金鑰）", "🗣️ AI 生活對話", "🤖 AI 情境心智圖", "📚 AI 互動閱讀"]
     )
     with tab_passage:
         page_passage(level)
@@ -1198,6 +1198,8 @@ def page_scenario(level: str) -> None:
         page_ai_dialogue(level)
     with tab_mindmap:
         page_ai_generate(level)
+    with tab_reading:
+        page_ai_reading(level)
 
 
 # ===========================================================================
@@ -1227,7 +1229,7 @@ def main() -> None:
     if level == "N5":
         functions.append("50音")
     functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
-                  "💬 情境會話", "📚 AI 互動閱讀", "📖 單字庫", "🔁 複習"]
+                  "💬 情境會話", "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1265,8 +1267,6 @@ def main() -> None:
         page_grammar(level)
     elif feature == "💬 情境會話":
         page_scenario(level)
-    elif feature == "📚 AI 互動閱讀":
-        page_ai_reading(level)
     elif feature == "📖 單字庫":
         page_vocab_bank(level)
     elif feature == "🔁 複習":
