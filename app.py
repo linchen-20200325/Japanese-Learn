@@ -395,6 +395,47 @@ def due_count() -> int:
 
 
 # ===========================================================================
+# 科學學習監督：依間隔重複(SRS)狀態分析記憶強度
+# ===========================================================================
+def card_mastery(card: dict) -> str:
+    """依複習次數與間隔判斷記憶強度：new / learning / young / mature。"""
+    if card.get("reps", 0) == 0:
+        return "new"
+    interval = card.get("interval", 0)
+    if interval >= 21:
+        return "mature"
+    if interval >= 7:
+        return "young"
+    return "learning"
+
+
+def mastery_distribution() -> dict:
+    """統計複習牌組各記憶強度的卡片數。"""
+    dist = {"new": 0, "learning": 0, "young": 0, "mature": 0}
+    for c in st.session_state.app_data.get("review_cards", []):
+        dist[card_mastery(c)] = dist.get(card_mastery(c), 0) + 1
+    return dist
+
+
+def review_forecast(days: int = 7) -> dict:
+    """未來 days 天每天到期的卡片數（逾期算今天），供複習負擔預測。"""
+    today = date.today()
+    labels = [(today + timedelta(days=i)).strftime("%m/%d") for i in range(days)]
+    counts = dict.fromkeys(labels, 0)
+    for c in st.session_state.app_data.get("review_cards", []):
+        try:
+            due = date.fromisoformat(c.get("due", today_str()))
+        except ValueError:
+            continue
+        delta = (due - today).days
+        if delta < 0:
+            counts[labels[0]] += 1
+        elif delta < days:
+            counts[labels[delta]] += 1
+    return counts
+
+
+# ===========================================================================
 # Mermaid 心智圖渲染
 # ===========================================================================
 _MERMAID_HTML = """
@@ -900,6 +941,46 @@ def page_review() -> None:
 
 
 # ===========================================================================
+# 📊 學習儀表板（科學監督：記憶強度、複習負擔預測）
+# ===========================================================================
+def page_dashboard(level: str) -> None:
+    st.header("📊 學習儀表板")
+    st.caption("用間隔重複（SRS）追蹤你的記憶狀態：今日待複習、記憶強度分布、未來複習負擔。")
+
+    deck = st.session_state.app_data.get("review_cards", [])
+    if not deck:
+        st.info("複習牌組是空的。到「💬 情境會話」或「📚 AI 互動閱讀」把句卡「加入複習」，"
+                "系統就會用間隔重複幫你科學排程並在這裡呈現記憶分析。")
+        return
+
+    dist = mastery_distribution()
+    total = len(deck)
+    mature = dist["young"] + dist["mature"]
+    today = today_str()
+    studied = sum(1 for c in deck if c.get("reps", 0) > 0)
+    reviews_total = sum(c.get("reps", 0) for c in deck)
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("🃏 複習卡總數", total)
+    c2.metric("📅 今日待複習", due_count())
+    c3.metric("🌳 已熟（漸熟+掌握）", mature)
+    c4.metric("💪 熟練比例", f"{int(mature / total * 100) if total else 0}%")
+
+    st.divider()
+    st.subheader("🎯 記憶強度分布")
+    labels = {"new": "🆕 新卡", "learning": "📖 學習中（<7天）",
+              "young": "🌱 漸熟（7–20天）", "mature": "🌳 已掌握（≥21天）"}
+    mc = st.columns(4)
+    for col, k in zip(mc, ["new", "learning", "young", "mature"]):
+        col.metric(labels[k], dist.get(k, 0))
+    st.caption(f"已開始複習 {studied}／{total} 張　·　累計複習次數 {reviews_total}")
+
+    st.subheader("📈 未來 7 天複習負擔預測")
+    st.caption("提早知道哪天卡片會堆積，方便分配每天的學習時間。")
+    st.bar_chart({"到期張數": review_forecast(7)}, height=240)
+
+
+# ===========================================================================
 # 🗣️ AI 生活對話（Gemini → 雙語對話 + 文法重點）
 # ===========================================================================
 def page_ai_dialogue(level: str) -> None:
@@ -1142,11 +1223,11 @@ def main() -> None:
     st.sidebar.markdown("### 第二層：功能切換")
 
     # 50 音為基礎功能，僅在 N5 顯示；其餘級別隱藏，保持介面乾淨。
-    functions = []
+    functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "💬 情境會話",
-                  "📚 AI 互動閱讀", "📖 單字庫", "🔁 複習"]
+    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
+                  "💬 情境會話", "📚 AI 互動閱讀", "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1172,7 +1253,9 @@ def main() -> None:
     st.divider()
 
     # ---------------- 功能分派（內容依級別動態切換）----------------
-    if feature == "50音":
+    if feature == "📊 學習儀表板":
+        page_dashboard(level)
+    elif feature == "50音":
         page_gojuon(level)
     elif feature == "核心單字庫":
         page_vocab(level)
