@@ -1270,6 +1270,76 @@ def render_ai_sidebar() -> None:
 # ===========================================================================
 # 💬 情境會話（三合一：範例短文 + AI 生活對話 + AI 情境心智圖）
 # ===========================================================================
+def _quiz_question(level: str, mode: str):
+    """依題型產生一道測驗題。回傳 dict 或 None（資料不足）。"""
+    vocab = data.load_vocab(level)
+    grammar = data.load_grammar(level)
+    if mode == "文法：意義→選文型":
+        if len(grammar) < 2:
+            return None
+        target = random.choice(grammar)
+        others = [g for g in grammar if g["point"] != target["point"]]
+        sample = random.sample(others, k=min(3, len(others)))
+        options = [target["point"]] + [g["point"] for g in sample]
+        random.shuffle(options)
+        return {"prompt": target["meaning"], "answer": target["point"],
+                "options": options, "hint": "選出符合語意的文型",
+                "nonce": random.randint(0, 10**9)}
+    if len(vocab) < 2:
+        return None
+    target = random.choice(vocab)
+    others = [w for w in vocab if w["kanji"] != target["kanji"]]
+    sample = random.sample(others, k=min(3, len(others)))
+    if mode == "中文→選假名":
+        options = [target["kana"]] + [w["kana"] for w in sample]
+        prompt, answer, hint = target["chinese"], target["kana"], "選出正確的假名唸法"
+    else:  # 日文→選中文
+        options = [target["chinese"]] + [w["chinese"] for w in sample]
+        prompt = f"{target['kanji']}（{target['kana']}）"
+        answer, hint = target["chinese"], "選出正確的中文意思"
+    random.shuffle(options)
+    return {"prompt": prompt, "answer": answer, "options": options,
+            "hint": hint, "nonce": random.randint(0, 10**9)}
+
+
+def page_quiz(level: str) -> None:
+    """測驗練習：三種主動回憶題型（中→假名／日→中／文法）。"""
+    st.header(f"📝 {data.LEVELS[level]['label']} 測驗練習")
+    st.caption("主動回憶練習：先想答案再作答。三種題型可切換，分數即時記錄。")
+
+    mode = st.radio("題型", ["中文→選假名", "日文→選中文", "文法：意義→選文型"],
+                    horizontal=True, key=f"quizmode_{level}")
+    qkey = f"quizq_{level}_{mode}"
+    if not st.session_state.get(qkey):
+        st.session_state[qkey] = _quiz_question(level, mode)
+    q = st.session_state[qkey]
+    if not q:
+        st.info("此級別／題型的資料不足，無法出題。")
+        return
+
+    st.markdown(f"**{q['hint']}**")
+    st.markdown(f"## {q['prompt']}")
+    choice = st.radio("選擇答案：", q["options"], index=None,
+                      key=f"quizchoice_{level}_{q['nonce']}")
+    c1, c2 = st.columns(2)
+    if c1.button("送出答案", key=f"quizsubmit_{level}_{q['nonce']}"):
+        stats = st.session_state.quiz[level]
+        stats["total"] += 1
+        if choice == q["answer"]:
+            stats["correct"] += 1
+            st.success("正解！🎉")
+        else:
+            st.error(f"再加油！正確答案是：{q['answer']}")
+    if c2.button("下一題 ➡️", key=f"quiznext_{level}_{q['nonce']}"):
+        st.session_state[qkey] = _quiz_question(level, mode)
+        st.rerun()
+
+    stats = st.session_state.quiz[level]
+    if stats["total"]:
+        st.caption(f"本級別測驗紀錄：答對 {stats['correct']} / {stats['total']} 題"
+                   f"（正確率 {stats['correct'] / stats['total']:.0%}）")
+
+
 def page_scenario(level: str) -> None:
     """整合原「情境短文／AI 情境生成／AI 生活對話／AI 互動閱讀」四個重複功能為單一入口。
 
@@ -1318,7 +1388,7 @@ def main() -> None:
     functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
+    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "📝 測驗練習",
                   "📄 情境短文", "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
                   "📖 單字庫", "🔁 複習"]
 
@@ -1356,6 +1426,8 @@ def main() -> None:
         page_flashcards(level)
     elif feature == "文法解說核心":
         page_grammar(level)
+    elif feature == "📝 測驗練習":
+        page_quiz(level)
     elif feature == "📄 情境短文":
         page_passage(level)
     elif feature == "🗣️ AI 生活對話":
