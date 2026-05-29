@@ -1223,6 +1223,72 @@ def page_ai_reading(level: str) -> None:
                     st.success(f"已加入 {n} 句。" if n else "已在複習清單中。")
 
 
+def page_subtitles(level: str) -> None:
+    """🎬 影視字幕學習：貼上日文台詞/字幕 → AI 逐句日翻中 + 教口語/慣用語/文法。"""
+    st.header(f"🎬 {data.LEVELS[level]['label']} 影視字幕學習")
+    with st.expander("💡 這是什麼？怎麼用？", expanded=False):
+        st.markdown(
+            "把真實影集／動畫／電影的日文台詞變成互動課程。\n\n"
+            "1. 貼上一段日文台詞，或直接貼 `.srt` 字幕內容（時間軸會自動忽略）\n"
+            "2. 按「🎬 生成字幕課程」→ AI **逐句日翻中** + 附假名、標出**口語／慣用語／文法**\n"
+            "3. 可整段**加入複習（SRS）**，也會**存進閱讀庫永久累積**\n\n"
+            "💡 影視台詞最道地，是教科書學不到的真實日文。"
+        )
+
+    if st.session_state.pop("_sub_saved", None):
+        st.success("已生成並存進閱讀庫（可在「📚 AI 互動閱讀」重看，資料庫持續長大）。")
+
+    if not ai.get_api_key():
+        st.warning("需要 Gemini API 金鑰才能生成。請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`。")
+    else:
+        raw = st.text_area("貼上日文台詞 / 字幕（.srt 也可）", height=200,
+                           placeholder="例：\nお前はもう死んでいる。\nなに？\n\n（可直接貼字幕檔內容，序號與時間軸會自動忽略）",
+                           key=f"sub_raw_{level}")
+        c1, c2 = st.columns([2, 3])
+        tier = c1.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"sub_tier_{level}")
+        if c2.button("🎬 生成字幕課程", type="primary", use_container_width=True,
+                     disabled=not (raw and raw.strip())):
+            try:
+                with st.spinner("AI 逐句翻譯 + 教學中…"):
+                    lesson = ai.gen_subtitle_lesson(raw, level, tier)
+                ok, _info = _persist_reading_jp(lesson, level)
+                st.session_state[f"sub_result_{level}"] = lesson
+                st.session_state["_sub_saved"] = ok
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(_friendly_gen_error(str(e)))
+
+    lesson = st.session_state.get(f"sub_result_{level}")
+    if lesson and lesson.get("sentences"):
+        st.divider()
+        st.markdown(f"#### 🎬 {lesson.get('title', '')}　{lesson.get('title_zh', '')}")
+        if lesson.get("summary"):
+            st.caption(lesson["summary"])
+        for i, s in enumerate(lesson["sentences"]):
+            with st.container(border=True):
+                st.markdown(f"### {s.get('jp', '')}")
+                if s.get("kana"):
+                    st.caption(f"假名 `{s['kana']}`")
+                if s.get("zh"):
+                    st.markdown(f"🇹🇼 {s['zh']}")
+                vocab = s.get("vocab") or {}
+                if vocab:
+                    st.markdown("📝 重點：" + "　".join(f"**{w}**＝{m}" for w, m in vocab.items()))
+                if s.get("grammar"):
+                    st.markdown(f"📚 文法：{s['grammar']}")
+                if s.get("jp"):
+                    play_button(s["jp"], key=f"sub_play_{level}_{i}")
+        if st.button(f"➕ 加入 {len(lesson['sentences'])} 句到複習",
+                     use_container_width=True, key=f"sub_rev_{level}"):
+            cards = [{"sentence": s["jp"], "kana": s.get("kana", ""),
+                      "chinese": s.get("zh", ""), "chunk": s["jp"][:20],
+                      "grammar": s.get("grammar", ""),
+                      "context": f"字幕：{lesson.get('title', '')}"}
+                     for s in lesson["sentences"] if s.get("jp")]
+            n = add_cards_to_review(cards)
+            st.success(f"已加入 {n} 句到複習清單。" if n else "這些句子已在複習清單中。")
+
+
 def render_ai_sidebar() -> None:
     """側欄顯示 Gemini key 與 GitHub Token 狀態 + 一鍵測試。"""
     st.sidebar.divider()
@@ -1390,7 +1456,7 @@ def main() -> None:
         functions.append("50音")
     functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "📝 測驗練習",
                   "📄 情境短文", "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
-                  "📖 單字庫", "🔁 複習"]
+                  "🎬 影視字幕", "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1436,6 +1502,8 @@ def main() -> None:
         page_ai_generate(level)
     elif feature == "📚 AI 互動閱讀":
         page_ai_reading(level)
+    elif feature == "🎬 影視字幕":
+        page_subtitles(level)
     elif feature == "📖 單字庫":
         page_vocab_bank(level)
     elif feature == "🔁 複習":
