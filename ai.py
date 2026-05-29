@@ -539,24 +539,31 @@ def push_bank_to_github(merged: dict, silent: bool = False):
                "User-Agent": "japanese-learn-cloud",
                "X-GitHub-Api-Version": "2022-11-28"}
 
+    # sha：更新既有檔案時必填；首次在該分支建立檔案時為 None（須省略 sha）。
+    sha = None
     try:
         req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as r:
             sha = json.loads(r.read())["sha"]
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:600]
-        return False, {"stage": "GET sha", "code": e.code, "body": body,
-                       "repo": repo, "branch": branch}
+        # 檔案還沒建立（分支存在但無此檔）→ 視為首次建立，繼續走 PUT。
+        # 分支不存在則 body 會含 "No commit found for the ref"，屬真錯誤。
+        if not (e.code == 404 and "No commit found for the ref" not in body):
+            return False, {"stage": "GET sha", "code": e.code, "body": body,
+                           "repo": repo, "branch": branch}
     except Exception as e:  # noqa: BLE001
         return False, {"stage": "GET sha", "code": 0, "body": f"{type(e).__name__}: {e}"}
 
     try:
-        body = json.dumps({
+        put_payload = {
             "message": f"vocab_bank: cloud append（共 {len(merged)} 字）",
             "content": base64.b64encode(payload_json.encode("utf-8")).decode("ascii"),
-            "sha": sha,
             "branch": branch,
-        }).encode("utf-8")
+        }
+        if sha:  # 首次建立檔案時不可帶 sha，否則 GitHub 回 422
+            put_payload["sha"] = sha
+        body = json.dumps(put_payload).encode("utf-8")
         req2 = urllib.request.Request(api, data=body, method="PUT",
                                       headers={**headers, "Content-Type": "application/json"})
         with urllib.request.urlopen(req2, timeout=20) as r:
