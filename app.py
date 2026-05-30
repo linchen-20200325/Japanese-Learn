@@ -1473,16 +1473,13 @@ def page_subtitles(level: str) -> None:
 
 
 def page_vocab_all(level: str) -> None:
-    """單字庫（合併單字卡）：翻面學習核心單字 + AI 生成單字庫，以分頁呈現。"""
+    """單字庫：翻面學習單字卡 + AI 生成單字庫，以分頁呈現。"""
     st.header(f"📖 {data.LEVELS[level]['label']} 單字庫")
     st.caption("「單字卡」翻面學習（正面日文、翻面看中文/詞性/用法/例句，可依詞性分類）；"
                "「AI 單字庫」可無限生成、存進資料庫累積長大。")
-    tab_card, tab_list, tab_ai = st.tabs(
-        ["🃏 單字卡（翻面）", "📗 核心清單", "🤖 AI 單字庫（可生成）"])
+    tab_card, tab_ai = st.tabs(["🃏 單字卡（翻面）", "🤖 AI 單字庫（可生成）"])
     with tab_card:
         page_flashcards(level)
-    with tab_list:
-        page_vocab(level)
     with tab_ai:
         page_vocab_bank(level)
 
