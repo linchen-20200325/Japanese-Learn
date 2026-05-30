@@ -26,5 +26,8 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - 內容量：db 各級單字 22–24、文法 11、短文 3；AI bank 持續長大（vocab_bank 已 600+）。手動擴充已足，後續靠 App 內 AI 生成。
 
 ## 待辦
-- 進度跨部署永久化（接外部儲存，目前 Cloud 重部署會重置）。
-- pytest 擴及 ai.py 純函式（解析/去重）。
+- （待指示）
+
+## 測試
+- `pytest -q`：44 passed（`tests/test_data.py` 資料完整性 + `tests/test_ai.py` 純函式解析）。
+- 跨部署永久化：「📚 我的資料庫 → ☁️ 備份／還原」手動推 GitHub `progress_backup.json`（還原採聯集）。

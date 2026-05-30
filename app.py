@@ -1591,10 +1591,72 @@ def page_vocab_all(level: str) -> None:
         page_vocab_bank(level)
 
 
+PROGRESS_BACKUP_PATH = "progress_backup.json"
+
+
+def _collect_progress() -> dict:
+    """蒐集需備份的使用者進度：已學會、測驗統計、收藏。"""
+    return {
+        "progress": {lv: sorted(s) for lv, s in st.session_state.progress.items()},
+        "quiz": st.session_state.quiz,
+        "favorites": _favorites(),
+    }
+
+
+def _apply_progress(data_in: dict) -> None:
+    """把還原的進度寫回 session 與本機檔（與還原前資料聯集，不覆蓋流失）。"""
+    prog = data_in.get("progress", {})
+    for lv in data.LEVEL_ORDER:
+        st.session_state.progress[lv] |= set(prog.get(lv, []))
+    for lv, st_ in data_in.get("quiz", {}).items():
+        if lv in st.session_state.quiz and isinstance(st_, dict):
+            cur = st.session_state.quiz[lv]
+            # 取較大者，避免還原把本機已累積的次數蓋小
+            cur["correct"] = max(cur["correct"], st_.get("correct", 0))
+            cur["total"] = max(cur["total"], st_.get("total", 0))
+    favs = _favorites()
+    for w, info in data_in.get("favorites", {}).items():
+        favs.setdefault(w, info)
+    save_progress()
+    save_data()
+
+
+def _render_progress_backup() -> None:
+    """跨部署永久化：把學習進度手動備份到 GitHub，或從 GitHub 還原。"""
+    with st.expander("☁️ 學習進度跨部署備份／還原（重新部署後用）", expanded=False):
+        st.caption("進度（已學會／測驗／收藏）平時存在本機，Cloud 重新部署會重置。"
+                   f"這裡可手動推到 GitHub `{PROGRESS_BACKUP_PATH}` 永久保存，"
+                   "換機或重部署後一鍵還原（還原採聯集，不會蓋掉現有進度）。")
+        if not ai.get_github_token():
+            st.warning("需設定 `GITHUB_TOKEN`（Streamlit Secrets）才能備份／還原。")
+            return
+        c1, c2 = st.columns(2)
+        if c1.button("☁️ 備份進度到 GitHub", use_container_width=True):
+            payload = json.dumps(_collect_progress(), ensure_ascii=False, indent=2) + "\n"
+            ok, info = ai.github_put_file(
+                PROGRESS_BACKUP_PATH, payload, "progress backup")
+            if ok:
+                st.success("✅ 已備份到 GitHub。")
+            else:
+                st.error(f"備份失敗：{info}")
+        if c2.button("⬇️ 從 GitHub 還原", use_container_width=True):
+            ok, data_in = ai.github_get_file(PROGRESS_BACKUP_PATH)
+            if ok and isinstance(data_in, dict):
+                _apply_progress(data_in)
+                st.success("✅ 已還原並合併進度。")
+                st.rerun()
+            elif isinstance(data_in, dict) and data_in.get("code") == 404:
+                st.info("GitHub 上還沒有備份檔，請先按「備份」。")
+            else:
+                st.error(f"還原失敗：{data_in}")
+
+
 def page_library(level: str) -> None:
     """📚 我的資料庫：所有 AI 生成並累積的內容（單字/文法/對話/閱讀）集中瀏覽。"""
     st.header("📚 我的資料庫")
     st.caption("所有 AI 生成、累積的內容都在這裡瀏覽——這些都會推到 GitHub 永久保存、持續長大。")
+
+    _render_progress_backup()
 
     vocab = {**ai.load_vocab_bank(),
              **st.session_state.get("synced_bank", {}),

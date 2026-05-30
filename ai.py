@@ -710,6 +710,38 @@ def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
         return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
 
 
+def github_get_file(path: str):
+    """從 GitHub repo 讀回某檔的 JSON 內容。回傳 (ok, data_or_info)。
+
+    與 github_put_file 配對，用於跨部署還原（例如學習進度備份）。
+    檔案不存在（404）時回傳 (False, {code:404})，呼叫端可視為「尚無備份」。
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    token = get_github_token()
+    if not token:
+        return False, {"stage": "token", "msg": "未設定 GITHUB_TOKEN"}
+    repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
+    branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
+    api = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "User-Agent": "japanese-learn-cloud",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        req = urllib.request.Request(api, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            current = json.loads(r.read())
+        raw = base64.b64decode(current.get("content", "")).decode("utf-8")
+        return True, json.loads(raw)
+    except urllib.error.HTTPError as e:
+        return False, {"stage": "GET", "code": e.code}
+    except Exception as e:  # noqa: BLE001
+        return False, {"stage": "GET", "code": 0, "body": f"{type(e).__name__}: {e}"}
+
+
 def generate_vocab_batch(words: list, tier: str) -> list:
     """呼叫 Gemini 一次生成一批日文單字的 JSON 資料。words 為 [(word, level), ...] 或 [word]。"""
     items = []
