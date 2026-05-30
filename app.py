@@ -847,10 +847,36 @@ def page_vocab_bank(level: str) -> None:
         else:
             st.warning("⚠️ 未設 `GITHUB_TOKEN`，生成的字只留在 session，**重整就消失**。"
                        "可手動按下方「⬇️ 下載」保存。")
-        if c3.button("🚀 開始生成", disabled=not api_key, use_container_width=True,
+        if c3.button("🚀 生成這批", disabled=not api_key, use_container_width=True,
                      type="primary"):
             _run_inapp_generation(int(n), tier, auto_push=bool(gh))
             st.rerun()
+
+        # ── 連續生成到目標字數（按一次自動跑多批，撞額度或達標才停）──
+        st.divider()
+        running = st.session_state.get("_autogen_active", False)
+        ac1, ac2 = st.columns([2, 2])
+        target = ac1.number_input("🎯 連續生成到（總庫存字數）", min_value=len(bank),
+                                  max_value=10000, value=min(10000, len(bank) + 1000),
+                                  step=500, disabled=running or not api_key)
+        if not running:
+            if ac2.button("🔁 連續生成到目標", disabled=not api_key,
+                          use_container_width=True, type="primary"):
+                st.session_state["_autogen_active"] = True
+                st.session_state["_autogen_target"] = int(target)
+                st.session_state["_autogen_batch"] = int(n)
+                st.session_state["_autogen_tier"] = tier
+                st.session_state["_autogen_stall"] = 0
+                st.rerun()
+        else:
+            if ac2.button("⏹ 停止連續生成", use_container_width=True):
+                for k in ("_autogen_active", "_autogen_target", "_autogen_batch",
+                          "_autogen_tier", "_autogen_stall"):
+                    st.session_state.pop(k, None)
+                if gh and live_bank:
+                    ok, info = ai.push_bank_to_github({**file_bank, **synced, **live_bank})
+                    _record_push(ok, info, merged={**file_bank, **synced, **live_bank})
+                st.rerun()
 
         try:
             from scripts.generate_vocab import load_wordlist
@@ -859,6 +885,39 @@ def page_vocab_bank(level: str) -> None:
             wl = 0
         st.caption(f"詞表 {wl} 字　·　已完成 **{len(bank)}** 字"
                    f"　·　📁 部署檔 {len(file_bank)} / ☁️ 已推 GitHub {len(synced)} / 🌱 待推 {len(live_bank)}")
+
+        # 連續生成驅動：每次 render 跑一批,未達標就自動 rerun 接著跑
+        if st.session_state.get("_autogen_active"):
+            tgt = st.session_state.get("_autogen_target", 0)
+            batch = st.session_state.get("_autogen_batch", 20)
+            atier = st.session_state.get("_autogen_tier", tier)
+            st.info(f"🔁 連續生成中… 目前 **{len(bank)}** / 目標 **{tgt}** 字。"
+                    "可按「⏹ 停止連續生成」中斷；撞額度會自動停。")
+            if len(bank) >= tgt:
+                st.success(f"🎉 已達標！庫存 {len(bank)} 字。")
+                st.session_state["_autogen_active"] = False
+                if gh and live_bank:
+                    merged = {**file_bank, **synced, **live_bank}
+                    ok, info = ai.push_bank_to_github(merged)
+                    _record_push(ok, info, merged=merged)
+                st.rerun()
+            else:
+                added = _run_inapp_generation(int(batch), atier, auto_push=False)
+                stall = st.session_state.get("_autogen_stall", 0)
+                stall = 0 if added else stall + 1
+                st.session_state["_autogen_stall"] = stall
+                if stall >= 2:
+                    st.session_state["_autogen_active"] = False
+                    if gh and live_bank:
+                        merged = {**file_bank, **synced, **live_bank}
+                        ok, info = ai.push_bank_to_github(merged)
+                        _record_push(ok, info, merged=merged)
+                    st.warning("連續生成已停止：連續多批沒有新增字"
+                               "（詞表已生完或今日額度用罄）。已推回目前進度。")
+                else:
+                    import time as _t
+                    _t.sleep(0.5)
+                    st.rerun()
         last = st.session_state.get("_last_push")
         if last:
             (st.success if last["ok"] else st.error)(
@@ -976,14 +1035,14 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     todo = [w for w in load_wordlist() if w["word"] not in have][:n]
     if not todo:
         st.success("詞表已全數完成，沒有待補單字。可編輯 `scripts/vocab_wordlist.txt` 增字。")
-        return
+        return 0
     todo_set = {w["word"] for w in todo}
     try:
         with st.spinner(f"用 Gemini（{tier}）生成 {len(todo)} 字…"):
             entries = ai.generate_vocab_batch(todo, tier)
     except Exception as e:  # noqa: BLE001
         st.error(_friendly_gen_error(str(e)))
-        return
+        return 0
 
     added, new_words = 0, []
     for e in entries:
@@ -1001,6 +1060,7 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
         _record_push(ok, info, merged=merged)
         if not ok:
             st.error(f"⚠️ 這批 {added} 字推回失敗，只留在 session，重整就消失！請手動下載 JSON。")
+    return added
 
 
 def _friendly_gen_error(msg: str) -> str:
