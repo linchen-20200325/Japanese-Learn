@@ -856,9 +856,10 @@ def page_vocab_bank(level: str) -> None:
         st.divider()
         running = st.session_state.get("_autogen_active", False)
         ac1, ac2 = st.columns([2, 2])
-        target = ac1.number_input("🎯 連續生成到（總庫存字數）", min_value=len(bank),
-                                  max_value=10000, value=min(10000, len(bank) + 1000),
-                                  step=500, disabled=running or not api_key)
+        target = ac1.number_input("🎯 連續生成到（總庫存字數，無上限）",
+                                  min_value=len(bank) + 1, max_value=1_000_000,
+                                  value=len(bank) + 1000, step=500,
+                                  disabled=running or not api_key)
         if not running:
             if ac2.button("🔁 連續生成到目標", disabled=not api_key,
                           use_container_width=True, type="primary"):
@@ -866,6 +867,7 @@ def page_vocab_bank(level: str) -> None:
                 st.session_state["_autogen_target"] = int(target)
                 st.session_state["_autogen_batch"] = int(n)
                 st.session_state["_autogen_tier"] = tier
+                st.session_state["_autogen_level"] = level
                 st.session_state["_autogen_stall"] = 0
                 st.rerun()
         else:
@@ -1033,13 +1035,17 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     synced = st.session_state.get("synced_bank", {})
     have = set(file_bank) | set(live) | set(synced)
     todo = [w for w in load_wordlist() if w["word"] not in have][:n]
-    if not todo:
-        st.success("詞表已全數完成，沒有待補單字。可編輯 `scripts/vocab_wordlist.txt` 增字。")
-        return 0
+    invent_mode = not todo
     todo_set = {w["word"] for w in todo}
     try:
-        with st.spinner(f"用 Gemini（{tier}）生成 {len(todo)} 字…"):
-            entries = ai.generate_vocab_batch(todo, tier)
+        if invent_mode:
+            # 詞表用罄 → AI 自行發想尚未收錄的新字，達成「無上限」持續生成
+            cur_level = st.session_state.get("_autogen_level") or "N3"
+            with st.spinner(f"用 Gemini（{tier}）自動發想 {n} 字…"):
+                entries = ai.invent_vocab_batch(n, cur_level, list(have), tier)
+        else:
+            with st.spinner(f"用 Gemini（{tier}）生成 {len(todo)} 字…"):
+                entries = ai.generate_vocab_batch(todo, tier)
     except Exception as e:  # noqa: BLE001
         st.error(_friendly_gen_error(str(e)))
         return 0
@@ -1047,7 +1053,8 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     added, new_words = 0, []
     for e in entries:
         ww = (e.get("word") or "").strip()
-        if ww in todo_set and ww not in have and e.get("meaning_zh") and e.get("kana"):
+        if ((invent_mode or ww in todo_set) and ww not in have
+                and e.get("meaning_zh") and e.get("kana")):
             live[ww] = e
             have.add(ww)
             new_words.append(ww)

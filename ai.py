@@ -726,6 +726,16 @@ def generate_vocab_batch(words: list, tier: str) -> list:
     return extract_json_array(text)
 
 
+def invent_vocab_batch(n: int, level: str, avoid: list, tier: str) -> list:
+    """詞表用罄時：請 AI 自行挑選尚未收錄的實用日文單字，達成「無上限」持續生成。"""
+    avoid_str = "、".join(list(avoid)[-120:])
+    user = (f"請自行挑選 {n} 個實用、常見、值得學的{level}程度日文單字"
+            f"（漢字或假名 headword；避免重複、避免冷僻字），並依系統格式輸出。"
+            f"已收錄（請避免）：{avoid_str}")
+    text = _llm_generate(VOCAB_SYSTEM_PROMPT, user, tier, max_tokens=8000)
+    return extract_json_array(text)
+
+
 def _repo_default_branch(repo: str, token: str) -> str:
     """查 repo 的預設分支；查不到時退回 'main'。
 
