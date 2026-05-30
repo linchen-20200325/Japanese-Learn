@@ -140,10 +140,22 @@ def learned_count(level: str) -> int:
 # ===========================================================================
 # 各功能頁面
 # ===========================================================================
+def _to_katakana(s: str) -> str:
+    """把平假名字串轉成片假名（逐字 Unicode 偏移 +0x60；非平假名原樣保留）。"""
+    return "".join(
+        chr(ord(c) + 0x60) if "ぁ" <= c <= "ゖ" else c for c in s
+    )
+
+
 def page_gojuon(level: str) -> None:
-    """50 音（基礎，僅 N5）。"""
+    """50 音（基礎，僅 N5）：可切換平假名／片假名。"""
     st.header("🈁 50 音入門")
     st.write("日文的基礎發音表，建議先熟練清音，再進入濁音、半濁音與拗音。")
+
+    script = st.radio("文字種類", ["平假名", "片假名"], horizontal=True, key="goj_script")
+    is_kata = script == "片假名"
+    st.caption("片假名多用於外來語、擬聲擬態與強調；發音與平假名相同。"
+               if is_kata else "平假名是日文最基礎的音節文字。")
 
     gojuon = data.load_gojuon()
     sections = [
@@ -162,9 +174,10 @@ def page_gojuon(level: str) -> None:
                 cols = st.columns(cols_per_row)
                 for j, (col, item) in enumerate(zip(cols, rows[i : i + cols_per_row])):
                     with col:
+                        kana = _to_katakana(item["kana"]) if is_kata else item["kana"]
                         st.markdown(
                             f"<div style='text-align:center;font-size:2rem;"
-                            f"line-height:1.2'>{item['kana']}</div>"
+                            f"line-height:1.2'>{kana}</div>"
                             f"<div style='text-align:center;color:#888'>"
                             f"{item['romaji']}</div>",
                             unsafe_allow_html=True,
@@ -223,22 +236,85 @@ def page_vocab(level: str) -> None:
                 render_examples(word.get("examples", []), key_prefix=f"vocab_{level}_{idx}")
 
 
+def _persist_grammar(items: list, level: str) -> tuple:
+    """把 AI 生成的文法加入永久庫：寫本機 + 推回 GitHub，文法資料庫持續長大。"""
+    bank = list(ai.load_grammar_bank())
+    have = {(g.get("level"), g.get("point")) for g in bank}
+    added = 0
+    for it in items:
+        it.setdefault("level", level)
+        if (it.get("level"), it.get("point")) in have:
+            continue
+        bank.append(it)
+        have.add((it.get("level"), it.get("point")))
+        added += 1
+    payload = json.dumps(bank, ensure_ascii=False, indent=2) + "\n"
+    try:
+        with open(ai.GRAMMAR_BANK_FILE, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except OSError:
+        pass
+    for fn in (ai.load_grammar_bank, ai._load_grammar_bank_cached):
+        if hasattr(fn, "clear"):
+            fn.clear()
+    ok, info = ai.github_put_file(
+        "grammar_bank.json", payload,
+        f"grammar_bank: AI 生成 {level} 文法 +{added}（共 {len(bank)} 條）")
+    return ok, added
+
+
+def _render_grammar_item(g: dict, level: str, key_prefix: str, expanded: bool = False) -> None:
+    with st.expander(f"{g['point']}　—　{g['meaning']}", expanded=expanded):
+        st.markdown(f"**意義：** {g['meaning']}")
+        if g.get("usage"):
+            st.success(f"💡 用法：{g['usage']}")
+        render_examples(g.get("examples", []), key_prefix=key_prefix)
+
+
 def page_grammar(level: str) -> None:
-    """文法解說核心（依級別動態切換）。"""
+    """文法解說核心（依級別動態切換）＋ AI 生成不重複新文法擴充資料庫。"""
     st.header(f"📖 {data.LEVELS[level]['label']} 文法解說核心")
     st.caption("每個文法皆含意義、用法說明與多組例句（可顯示唸法與中文）。")
 
-    grammar = data.load_grammar(level)
-    if not grammar:
-        st.info("此級別尚無文法資料。")
+    db_grammar = data.load_grammar(level)
+    bank_grammar = [g for g in ai.load_grammar_bank() if g.get("level") == level]
+
+    # 🤖 AI 生成新文法（不重複，擴充資料庫）
+    if st.session_state.pop("_gram_saved", None) is not None:
+        st.success(f"已生成並存進文法資料庫！本級別現有 {len(db_grammar) + len(bank_grammar)} 條。")
+    with st.expander("🤖 AI 生成不同程度、不重複的新文法（擴充資料庫）", expanded=False):
+        if not ai.get_api_key():
+            st.warning("需要 Gemini 金鑰才能生成。請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`。")
+        else:
+            c1, c2 = st.columns([2, 3])
+            n = c1.number_input("一次生成幾條", 1, 10, 3, key=f"gramn_{level}")
+            if c2.button("🤖 生成新文法", type="primary", use_container_width=True,
+                         key=f"gramgen_{level}"):
+                existing = [g["point"] for g in db_grammar + bank_grammar]
+                try:
+                    with st.spinner("AI 生成中…"):
+                        items = ai.gen_grammar_batch(level, existing, int(n),
+                                                     next(iter(ai.GEN_MODEL_TIERS)))
+                    if items:
+                        ok, added = _persist_grammar(items, level)
+                        st.session_state["_gram_saved"] = added
+                        st.rerun()
+                    else:
+                        st.warning("這次沒有產生新的（可能與既有重複），請再試一次。")
+                except Exception as e:  # noqa: BLE001
+                    st.error(_friendly_gen_error(str(e)))
+
+    if not db_grammar and not bank_grammar:
+        st.info("此級別尚無文法資料。可用上方「AI 生成新文法」建立。")
         return
 
-    for idx, g in enumerate(grammar):
-        with st.expander(f"{g['point']}　—　{g['meaning']}", expanded=(idx == 0)):
-            st.markdown(f"**意義：** {g['meaning']}")
-            if g.get("usage"):
-                st.success(f"💡 用法：{g['usage']}")
-            render_examples(g.get("examples", []), key_prefix=f"gram_{level}_{idx}")
+    for idx, g in enumerate(db_grammar):
+        _render_grammar_item(g, level, f"gram_{level}_{idx}", expanded=(idx == 0))
+
+    if bank_grammar:
+        st.markdown(f"#### 🤖 AI 擴充文法（{len(bank_grammar)} 條，持續累積）")
+        for idx, g in enumerate(bank_grammar):
+            _render_grammar_item(g, level, f"grambank_{level}_{idx}")
 
 
 def page_passage(level: str) -> None:
@@ -1289,6 +1365,17 @@ def page_subtitles(level: str) -> None:
             st.success(f"已加入 {n} 句到複習清單。" if n else "這些句子已在複習清單中。")
 
 
+def page_vocab_all(level: str) -> None:
+    """單字庫（合併）：內建核心單字 + AI 生成單字庫，以分頁呈現。"""
+    st.header(f"📖 {data.LEVELS[level]['label']} 單字庫")
+    st.caption("「核心單字」是內建精選；「AI 單字庫」可無限生成、存進資料庫累積長大。")
+    tab_core, tab_ai = st.tabs(["📗 核心單字（內建）", "🤖 AI 單字庫（可生成）"])
+    with tab_core:
+        page_vocab(level)
+    with tab_ai:
+        page_vocab_bank(level)
+
+
 def render_ai_sidebar() -> None:
     """側欄顯示 Gemini key 與 GitHub Token 狀態 + 一鍵測試。"""
     st.sidebar.divider()
@@ -1454,9 +1541,9 @@ def main() -> None:
     functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心", "📝 測驗練習",
-                  "📄 情境短文", "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
-                  "🎬 影視字幕", "📖 單字庫", "🔁 複習"]
+    functions += ["📖 單字庫", "🃏 單字卡", "文法解說核心", "📝 測驗練習",
+                  "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
+                  "🎬 影視字幕", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1486,16 +1573,14 @@ def main() -> None:
         page_dashboard(level)
     elif feature == "50音":
         page_gojuon(level)
-    elif feature == "核心單字庫":
-        page_vocab(level)
+    elif feature == "📖 單字庫":
+        page_vocab_all(level)
     elif feature == "🃏 單字卡":
         page_flashcards(level)
     elif feature == "文法解說核心":
         page_grammar(level)
     elif feature == "📝 測驗練習":
         page_quiz(level)
-    elif feature == "📄 情境短文":
-        page_passage(level)
     elif feature == "🗣️ AI 生活對話":
         page_ai_dialogue(level)
     elif feature == "🤖 AI 情境生成":
@@ -1504,8 +1589,6 @@ def main() -> None:
         page_ai_reading(level)
     elif feature == "🎬 影視字幕":
         page_subtitles(level)
-    elif feature == "📖 單字庫":
-        page_vocab_bank(level)
     elif feature == "🔁 複習":
         page_review()
 

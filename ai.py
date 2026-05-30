@@ -19,6 +19,8 @@ import streamlit as st
 VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_bank.json")
 # AI 生成的閱讀永久庫（推回 GitHub 後持續累積長大，重整不消失）
 READINGS_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "readings_bank.json")
+# AI 生成的文法永久庫（依級別擴充，越長越多）
+GRAMMAR_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -424,6 +426,72 @@ def clean_subtitle_text(raw: str) -> str:
     return "\n".join(out)
 
 
+GRAMMAR_GEN_PROMPT = """你是 JLPT 日文文法教材編輯。使用者給「JLPT 級別」與「已存在的文法（不可重複）」，
+你要產出該級別**新的、不重複**的核心文法點，難度需貼合該級別。
+
+# 嚴格輸出 JSON（只輸出 JSON array，前後不得有任何文字、不得包 markdown code fence）
+[
+  {
+    "point": "文型（如 〜ようとする）",
+    "meaning": "繁中一句話意義",
+    "usage": "繁中用法說明（接續、語感、常見搭配）",
+    "examples": [
+      {"jp": "日文例句（含漢字）", "kana": "整句假名", "zh": "繁中翻譯"},
+      {"jp": "第二個例句", "kana": "整句假名", "zh": "繁中翻譯"}
+    ]
+  }
+]
+
+# 規範
+- 嚴禁與「已存在文法」清單重複。
+- 每個文法務必含 2 個以上例句，每句都要 kana 假名。
+- 難度貼合級別：N5 最基礎、N1 最進階。
+"""
+
+
+def gen_grammar_batch(level: str, existing_points: list, n: int, tier: str) -> list:
+    """為指定級別生成 n 個不重複的新文法點。回傳 list（每筆含 level 欄位）。"""
+    existing = "、".join(existing_points) if existing_points else "（無）"
+    text = _llm_generate(
+        GRAMMAR_GEN_PROMPT,
+        f"JLPT 級別：{level}\n要生成數量：{n}\n已存在文法（不可重複）：{existing}",
+        tier, max_tokens=8000)
+    items = extract_json_array(text)
+    out = []
+    have = {p for p in existing_points}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        point = (it.get("point") or "").strip()
+        if not point or point in have:
+            continue
+        if not it.get("meaning") or not isinstance(it.get("examples"), list):
+            continue
+        it["level"] = level
+        out.append(it)
+        have.add(point)
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def _load_grammar_bank_cached(_mtime: float) -> list:
+    try:
+        with open(GRAMMAR_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_grammar_bank() -> list:
+    """讀取 grammar_bank.json（AI 生成且已永久保存的文法清單，含 level 欄位）。"""
+    try:
+        mtime = os.path.getmtime(GRAMMAR_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_grammar_bank_cached(mtime)
+
+
 def gen_subtitle_lesson(raw_text: str, level: str, tier: str) -> dict:
     """把貼上的日文台詞／字幕轉成互動學習課程（結構同閱讀條目）。"""
     cleaned = clean_subtitle_text(raw_text)[:4000]
@@ -582,7 +650,11 @@ def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
             if isinstance(remote, list) and isinstance(new, list):
                 seen, union = set(), []
                 for item in remote + new:
-                    key = (item.get("id") or item.get("title")) if isinstance(item, dict) else item
+                    if isinstance(item, dict):
+                        key = (item.get("id") or item.get("title") or item.get("point")
+                               or json.dumps(item, ensure_ascii=False, sort_keys=True))
+                    else:
+                        key = item
                     if key in seen:
                         continue
                     seen.add(key)
