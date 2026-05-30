@@ -401,21 +401,44 @@ def page_passage(level: str) -> None:
     _vocab_quiz(level)
 
 
+# 測驗模式：key -> (顯示名稱, 題幹說明)
+QUIZ_MODES = {
+    "zh2kana": "中文 → 選假名",
+    "jp2zh": "日文 → 選中文",
+    "audio2kana": "🔊 聽發音 → 選假名",
+}
+
+
 def _vocab_quiz(level: str) -> None:
-    """以本級別單字產生「中翻日（選假名）」小測驗。"""
+    """以本級別單字產生小測驗，支援三種題型。"""
     st.subheader("🎯 進級小測驗")
     vocab = data.load_vocab(level)
     if len(vocab) < 2:
         st.info("單字不足，無法產生測驗。")
         return
 
-    quiz_key = f"current_quiz_{level}"
-    # 為每個級別維持一題當前題目，切換級別不互相干擾。
+    mode = st.radio(
+        "測驗模式：",
+        list(QUIZ_MODES),
+        format_func=lambda m: QUIZ_MODES[m],
+        key=f"quiz_mode_{level}",
+        horizontal=True,
+    )
+
+    # 每個級別 × 模式維持一題當前題目，切換不互相干擾。
+    quiz_key = f"current_quiz_{level}_{mode}"
     if quiz_key not in st.session_state:
-        st.session_state[quiz_key] = _new_question(vocab)
+        st.session_state[quiz_key] = _new_question(vocab, mode)
 
     q = st.session_state[quiz_key]
-    st.write(f"請問「**{q['prompt']}**」的正確唸法（假名）是？")
+
+    if mode == "audio2kana":
+        st.write("請聽發音，選出正確的假名：")
+        play_button(q["audio"], key=f"quiz_audio_{level}_{q['nonce']}", label="🔊 播放發音")
+    elif mode == "jp2zh":
+        st.write(f"請問「**{q['prompt']}**」的正確中文意思是？")
+    else:  # zh2kana
+        st.write(f"請問「**{q['prompt']}**」的正確唸法（假名）是？")
 
     choice = st.radio(
         "選擇答案：",
@@ -437,7 +460,7 @@ def _vocab_quiz(level: str) -> None:
             save_progress()
     with col_next:
         if st.button("下一題 ➡️", key=f"next_{level}_{q['nonce']}"):
-            st.session_state[quiz_key] = _new_question(vocab)
+            st.session_state[quiz_key] = _new_question(vocab, mode)
             st.rerun()
 
     stats = st.session_state.quiz[level]
@@ -448,19 +471,34 @@ def _vocab_quiz(level: str) -> None:
         )
 
 
-def _new_question(vocab: list) -> dict:
-    """產生一道測驗題（中文 → 選假名）。"""
+def _new_question(vocab: list, mode: str = "zh2kana") -> dict:
+    """依模式產生一道測驗題。
+
+    zh2kana    ：中文 → 選假名（選項為假名）
+    jp2zh      ：日文（漢字＋假名）→ 選中文（選項為中文）
+    audio2kana ：聽發音（播假名）→ 選假名（選項為假名）
+    """
     target = random.choice(vocab)
     distractors = [w for w in vocab if w["kanji"] != target["kanji"]]
     sample = random.sample(distractors, k=min(3, len(distractors)))
-    options = [target["kana"]] + [w["kana"] for w in sample]
+
+    q = {"nonce": random.randint(0, 10**9)}
+    if mode == "jp2zh":
+        q["prompt"] = f"{target['kanji']}（{target['kana']}）"
+        q["answer"] = target["chinese"]
+        options = [target["chinese"]] + [w["chinese"] for w in sample]
+    elif mode == "audio2kana":
+        q["audio"] = target["kana"]
+        q["answer"] = target["kana"]
+        options = [target["kana"]] + [w["kana"] for w in sample]
+    else:  # zh2kana
+        q["prompt"] = target["chinese"]
+        q["answer"] = target["kana"]
+        options = [target["kana"]] + [w["kana"] for w in sample]
+
     random.shuffle(options)
-    return {
-        "prompt": target["chinese"],
-        "answer": target["kana"],
-        "options": options,
-        "nonce": random.randint(0, 10**9),
-    }
+    q["options"] = options
+    return q
 
 
 # ===========================================================================
