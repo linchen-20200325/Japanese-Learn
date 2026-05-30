@@ -605,8 +605,25 @@ def page_flashcards(level: str) -> None:
         if e.get("jlpt") == level and k not in have:
             deck.append({**e, "src": "bank"})
 
+    # 依詞性分類學習（名詞／動詞／形容詞）
+    def _pos_group(p: str) -> str:
+        if "動詞" in p:
+            return "動詞"
+        if "形容" in p:
+            return "形容詞"
+        if "名詞" in p or "代名" in p:
+            return "名詞"
+        return "其他"
+
+    if deck:
+        avail = [g for g in ["名詞", "動詞", "形容詞", "其他"]
+                 if any(_pos_group(d.get("pos", "")) == g for d in deck)]
+        pick = st.radio("詞性分類", ["全部"] + avail, horizontal=True, key=f"fc_pos_{level}")
+        if pick != "全部":
+            deck = [d for d in deck if _pos_group(d.get("pos", "")) == pick]
+
     if not deck:
-        st.info("此級別尚無單字卡。可到「📖 單字庫」用 AI 生成更多字。")
+        st.info("此分類尚無單字卡。可切換詞性，或到本頁「🤖 AI 單字庫」分頁生成更多字。")
         return
 
     ikey, fkey = f"fc_idx_{level}", f"fc_flip_{level}"
@@ -1456,11 +1473,15 @@ def page_subtitles(level: str) -> None:
 
 
 def page_vocab_all(level: str) -> None:
-    """單字庫（合併）：內建核心單字 + AI 生成單字庫，以分頁呈現。"""
+    """單字庫（合併單字卡）：翻面學習核心單字 + AI 生成單字庫，以分頁呈現。"""
     st.header(f"📖 {data.LEVELS[level]['label']} 單字庫")
-    st.caption("「核心單字」是內建精選；「AI 單字庫」可無限生成、存進資料庫累積長大。")
-    tab_core, tab_ai = st.tabs(["📗 核心單字（內建）", "🤖 AI 單字庫（可生成）"])
-    with tab_core:
+    st.caption("「單字卡」翻面學習（正面日文、翻面看中文/詞性/用法/例句，可依詞性分類）；"
+               "「AI 單字庫」可無限生成、存進資料庫累積長大。")
+    tab_card, tab_list, tab_ai = st.tabs(
+        ["🃏 單字卡（翻面）", "📗 核心清單", "🤖 AI 單字庫（可生成）"])
+    with tab_card:
+        page_flashcards(level)
+    with tab_list:
         page_vocab(level)
     with tab_ai:
         page_vocab_bank(level)
@@ -1631,7 +1652,7 @@ def main() -> None:
     functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["📖 單字庫", "🃏 單字卡", "文法解說核心", "📝 測驗練習",
+    functions += ["📖 單字庫", "文法解說核心", "📝 測驗練習",
                   "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
                   "🎬 影視字幕", "🔁 複習"]
 
@@ -1665,8 +1686,6 @@ def main() -> None:
         page_gojuon(level)
     elif feature == "📖 單字庫":
         page_vocab_all(level)
-    elif feature == "🃏 單字卡":
-        page_flashcards(level)
     elif feature == "文法解說核心":
         page_grammar(level)
     elif feature == "📝 測驗練習":
