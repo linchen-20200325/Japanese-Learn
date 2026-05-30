@@ -52,10 +52,12 @@ def load_data() -> dict:
             d.setdefault("lessons", [])
             d.setdefault("progress", {})
             d.setdefault("quiz", {})
+            d.setdefault("favorites", {})
             return d
         except (json.JSONDecodeError, OSError):
             pass
-    return {"review_cards": [], "lessons": [], "progress": {}, "quiz": {}}
+    return {"review_cards": [], "lessons": [], "progress": {}, "quiz": {},
+            "favorites": {}}
 
 
 def save_data() -> None:
@@ -161,6 +163,33 @@ def mark_learned(level: str, kanji: str) -> None:
 
 def learned_count(level: str) -> int:
     return len(st.session_state.progress[level])
+
+
+# ===========================================================================
+# 收藏（我的最愛）— 跨級別、持久化於 app_data.favorites
+# ===========================================================================
+def _favorites() -> dict:
+    """回傳 favorites dict：{ word: {kana, meaning_zh, level} }。"""
+    return st.session_state.app_data.setdefault("favorites", {})
+
+
+def is_favorite(word: str) -> bool:
+    return word in _favorites()
+
+
+def toggle_favorite(word: str, info: dict) -> bool:
+    """切換收藏狀態並持久化。回傳切換後是否為已收藏。"""
+    favs = _favorites()
+    if word in favs:
+        del favs[word]
+        result = False
+    else:
+        favs[word] = {"kana": info.get("kana", ""),
+                      "meaning_zh": info.get("meaning_zh", ""),
+                      "level": info.get("level", "")}
+        result = True
+    save_data()
+    return result
 
 
 # ===========================================================================
@@ -398,107 +427,7 @@ def page_passage(level: str) -> None:
                     st.caption(f"🇹🇼 {sent.get('zh', '')}")
 
     st.divider()
-    _vocab_quiz(level)
-
-
-# 測驗模式：key -> (顯示名稱, 題幹說明)
-QUIZ_MODES = {
-    "zh2kana": "中文 → 選假名",
-    "jp2zh": "日文 → 選中文",
-    "audio2kana": "🔊 聽發音 → 選假名",
-}
-
-
-def _vocab_quiz(level: str) -> None:
-    """以本級別單字產生小測驗，支援三種題型。"""
-    st.subheader("🎯 進級小測驗")
-    vocab = data.load_vocab(level)
-    if len(vocab) < 2:
-        st.info("單字不足，無法產生測驗。")
-        return
-
-    mode = st.radio(
-        "測驗模式：",
-        list(QUIZ_MODES),
-        format_func=lambda m: QUIZ_MODES[m],
-        key=f"quiz_mode_{level}",
-        horizontal=True,
-    )
-
-    # 每個級別 × 模式維持一題當前題目，切換不互相干擾。
-    quiz_key = f"current_quiz_{level}_{mode}"
-    if quiz_key not in st.session_state:
-        st.session_state[quiz_key] = _new_question(vocab, mode)
-
-    q = st.session_state[quiz_key]
-
-    if mode == "audio2kana":
-        st.write("請聽發音，選出正確的假名：")
-        play_button(q["audio"], key=f"quiz_audio_{level}_{q['nonce']}", label="🔊 播放發音")
-    elif mode == "jp2zh":
-        st.write(f"請問「**{q['prompt']}**」的正確中文意思是？")
-    else:  # zh2kana
-        st.write(f"請問「**{q['prompt']}**」的正確唸法（假名）是？")
-
-    choice = st.radio(
-        "選擇答案：",
-        q["options"],
-        key=f"quiz_choice_{level}_{q['nonce']}",
-        index=None,
-    )
-
-    col_submit, col_next = st.columns(2)
-    with col_submit:
-        if st.button("送出答案", key=f"submit_{level}_{q['nonce']}"):
-            stats = st.session_state.quiz[level]
-            stats["total"] += 1
-            if choice == q["answer"]:
-                stats["correct"] += 1
-                st.success("正解！🎉")
-            else:
-                st.error(f"再加油！正確答案是：{q['answer']}")
-            save_progress()
-    with col_next:
-        if st.button("下一題 ➡️", key=f"next_{level}_{q['nonce']}"):
-            st.session_state[quiz_key] = _new_question(vocab, mode)
-            st.rerun()
-
-    stats = st.session_state.quiz[level]
-    if stats["total"]:
-        st.caption(
-            f"本級別測驗紀錄：答對 {stats['correct']} / {stats['total']} 題"
-            f"（正確率 {stats['correct'] / stats['total']:.0%}）"
-        )
-
-
-def _new_question(vocab: list, mode: str = "zh2kana") -> dict:
-    """依模式產生一道測驗題。
-
-    zh2kana    ：中文 → 選假名（選項為假名）
-    jp2zh      ：日文（漢字＋假名）→ 選中文（選項為中文）
-    audio2kana ：聽發音（播假名）→ 選假名（選項為假名）
-    """
-    target = random.choice(vocab)
-    distractors = [w for w in vocab if w["kanji"] != target["kanji"]]
-    sample = random.sample(distractors, k=min(3, len(distractors)))
-
-    q = {"nonce": random.randint(0, 10**9)}
-    if mode == "jp2zh":
-        q["prompt"] = f"{target['kanji']}（{target['kana']}）"
-        q["answer"] = target["chinese"]
-        options = [target["chinese"]] + [w["chinese"] for w in sample]
-    elif mode == "audio2kana":
-        q["audio"] = target["kana"]
-        q["answer"] = target["kana"]
-        options = [target["kana"]] + [w["kana"] for w in sample]
-    else:  # zh2kana
-        q["prompt"] = target["chinese"]
-        q["answer"] = target["kana"]
-        options = [target["kana"]] + [w["kana"] for w in sample]
-
-    random.shuffle(options)
-    q["options"] = options
-    return q
+    st.info("想做測驗？請到側邊欄「📝 測驗練習」，有中→假名、日→中、聽發音、文法等題型。")
 
 
 # ===========================================================================
@@ -729,7 +658,7 @@ def page_flashcards(level: str) -> None:
             if card.get("pos"):
                 st.caption(f"詞性：{card['pos']}")
 
-    b1, b2, b3, b4, b5 = st.columns(5)
+    b1, b2, b3, b4, b5, b6 = st.columns(6)
     if b1.button("← 上一個", use_container_width=True, key=f"fc_prev_{level}"):
         st.session_state[ikey] = (idx - 1) % len(deck)
         st.session_state[fkey] = False
@@ -746,12 +675,19 @@ def page_flashcards(level: str) -> None:
             learned.add(card["word"])
         save_progress()
         st.rerun()
-    if b4.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
+    faved = is_favorite(card["word"])
+    if b4.button("⭐ 已收藏" if faved else "☆ 收藏",
+                 use_container_width=True, key=f"fc_fav_{level}"):
+        toggle_favorite(card["word"], {"kana": card.get("kana", ""),
+                                       "meaning_zh": card.get("meaning_zh", ""),
+                                       "level": level})
+        st.rerun()
+    if b5.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
         import random
         st.session_state[ikey] = random.randrange(len(deck))
         st.session_state[fkey] = False
         st.rerun()
-    if b5.button("下一個 →", use_container_width=True, key=f"fc_next_{level}"):
+    if b6.button("下一個 →", use_container_width=True, key=f"fc_next_{level}"):
         st.session_state[ikey] = (idx + 1) % len(deck)
         st.session_state[fkey] = False
         st.rerun()
@@ -1667,13 +1603,30 @@ def page_library(level: str) -> None:
     dialogue = _level_items(ai.load_dialogue_bank(), "_sess_dialogue", None, "id")
     reading = _level_items(ai.load_readings_bank(), "_sess_readings", None, "id")
 
-    m1, m2, m3, m4 = st.columns(4)
+    favs = _favorites()
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("📗 單字", len(vocab))
     m2.metric("📐 文法", len(grammar))
     m3.metric("🗣️ 對話", len(dialogue))
     m4.metric("📚 閱讀／字幕", len(reading))
+    m5.metric("⭐ 我的最愛", len(favs))
 
-    t_v, t_g, t_d, t_r = st.tabs(["📗 單字", "📐 文法", "🗣️ 對話", "📚 閱讀／字幕"])
+    t_fav, t_v, t_g, t_d, t_r = st.tabs(
+        ["⭐ 我的最愛", "📗 單字", "📐 文法", "🗣️ 對話", "📚 閱讀／字幕"])
+    with t_fav:
+        if not favs:
+            st.info("還沒有收藏。到「📖 單字庫 → 🃏 單字卡」按「☆ 收藏」加入最愛。")
+        else:
+            st.caption(f"共收藏 {len(favs)} 個單字（跨級別，永久保存）")
+            for w in sorted(favs):
+                e = favs[w]
+                c1, c2 = st.columns([6, 1])
+                lv = f"[{e['level']}] " if e.get("level") else ""
+                c1.markdown(f"{lv}**{w}**　{e.get('kana', '')}　— {e.get('meaning_zh', '')}")
+                if c2.button("🗑️ 移除", key=f"unfav_{w}"):
+                    toggle_favorite(w, e)
+                    st.rerun()
+
     with t_v:
         if not vocab:
             st.info("還沒有 AI 單字。到「📖 單字庫 → 🤖 AI 單字庫」按生成。")
@@ -1781,16 +1734,21 @@ def _quiz_question(level: str, mode: str):
     target = random.choice(vocab)
     others = [w for w in vocab if w["kanji"] != target["kanji"]]
     sample = random.sample(others, k=min(3, len(others)))
+    audio = ""
     if mode == "中文→選假名":
         options = [target["kana"]] + [w["kana"] for w in sample]
         prompt, answer, hint = target["chinese"], target["kana"], "選出正確的假名唸法"
+    elif mode == "🔊 聽發音→選假名":
+        options = [target["kana"]] + [w["kana"] for w in sample]
+        prompt, answer, hint = "", target["kana"], "聽發音，選出正確的假名"
+        audio = target["kana"]
     else:  # 日文→選中文
         options = [target["chinese"]] + [w["chinese"] for w in sample]
         prompt = f"{target['kanji']}（{target['kana']}）"
         answer, hint = target["chinese"], "選出正確的中文意思"
     random.shuffle(options)
     return {"prompt": prompt, "answer": answer, "options": options,
-            "hint": hint, "nonce": random.randint(0, 10**9)}
+            "hint": hint, "audio": audio, "nonce": random.randint(0, 10**9)}
 
 
 def page_quiz(level: str) -> None:
@@ -1798,7 +1756,8 @@ def page_quiz(level: str) -> None:
     st.header(f"📝 {data.LEVELS[level]['label']} 測驗練習")
     st.caption("主動回憶練習：先想答案再作答。三種題型可切換，分數即時記錄。")
 
-    mode = st.radio("題型", ["中文→選假名", "日文→選中文", "文法：意義→選文型"],
+    mode = st.radio("題型",
+                    ["中文→選假名", "日文→選中文", "🔊 聽發音→選假名", "文法：意義→選文型"],
                     horizontal=True, key=f"quizmode_{level}")
     qkey = f"quizq_{level}_{mode}"
     if not st.session_state.get(qkey):
@@ -1809,7 +1768,10 @@ def page_quiz(level: str) -> None:
         return
 
     st.markdown(f"**{q['hint']}**")
-    st.markdown(f"## {q['prompt']}")
+    if q.get("audio"):
+        play_button(q["audio"], key=f"quizaudio_{level}_{q['nonce']}", label="🔊 播放發音")
+    elif q.get("prompt"):
+        st.markdown(f"## {q['prompt']}")
     choice = st.radio("選擇答案：", q["options"], index=None,
                       key=f"quizchoice_{level}_{q['nonce']}")
     c1, c2 = st.columns(2)
@@ -1821,6 +1783,7 @@ def page_quiz(level: str) -> None:
             st.success("正解！🎉")
         else:
             st.error(f"再加油！正確答案是：{q['answer']}")
+        save_progress()
     if c2.button("下一題 ➡️", key=f"quiznext_{level}_{q['nonce']}"):
         st.session_state[qkey] = _quiz_question(level, mode)
         st.rerun()
