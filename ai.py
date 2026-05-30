@@ -17,8 +17,12 @@ import re
 import streamlit as st
 
 VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_bank.json")
+# AI 生成的閱讀永久庫（推回 GitHub 後持續累積長大，重整不消失）
+READINGS_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "readings_bank.json")
+# AI 生成的文法永久庫（依級別擴充，越長越多）
 GRAMMAR_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_bank.json")
-PASSAGE_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "passage_bank.json")
+# AI 生成的對話永久庫（依級別累積，越長越多）
+DIALOGUE_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dialogue_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -175,6 +179,30 @@ READING_GEN_PROMPT = """你是日文閱讀教材編輯。使用者給「主題 +
 """
 
 
+SUBTITLE_GEN_PROMPT = """你是日文影視教學編輯。使用者會貼上一段日文影集／動畫／電影台詞（可能含字幕序號與時間軸，請忽略那些）。
+請把台詞整理成可互動的學習課程，逐句日翻中並標註教學重點（特別是口語、慣用語、語氣詞等教科書學不到的）。
+
+# 嚴格輸出 JSON（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
+{
+  "id": "短英文 id",
+  "title": "日文標題",
+  "title_zh": "繁中標題",
+  "level": "N5 / N4 / N3 / N2 / N1 擇一（依台詞難度）",
+  "summary": "繁中一句話：這段在演什麼、適合學什麼",
+  "sentences": [
+    {"jp": "原台詞（含漢字，口語照舊）", "kana": "整句假名讀音", "zh": "自然繁中翻譯",
+     "vocab": {"単語": "中文翻譯"}, "grammar": "該句口語/文法重點（繁中一句話）"}
+  ]
+}
+
+# 規範
+- 盡量保留原台詞順序與內容，逐句翻譯（過短的可合併）。
+- vocab 著重「影視口語、慣用語、語氣詞、縮約形」。
+- sentences 最多 12 句（台詞太長就取最精華的前段）。
+- 每句務必附 kana 假名，方便學習者朗讀。
+"""
+
+
 DIALOGUE_GEN_PROMPT = """你是日文會話教材編輯。使用者給「情境 + JLPT 級別」，你產出一段自然的生活對話練習。
 
 # 嚴格輸出 JSON（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
@@ -207,34 +235,6 @@ DIALOGUE_GEN_PROMPT = """你是日文會話教材編輯。使用者給「情境 
 - N3: 複雜句型、抽象語彙、被動使役
 - N2: 書面語、商務日文、接續詞
 - N1: 慣用句、正式文書、高階語彙
-"""
-
-
-GRAMMAR_GEN_PROMPT = """你是 JLPT 日文文法教學專家。使用者給「JLPT 級別（可附主題或指定文型）」，你產出該級別的核心文法解說。
-
-# 嚴格輸出 JSON array（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
-[
-  {
-    "point": "文法句型（例如「〜たことがあります」）",
-    "meaning": "繁中一句話說明此文型的意思",
-    "usage": "繁中用法說明：接續方式、語感、常見場合、否定/過去等變化",
-    "jlpt": "N5 / N4 / N3 / N2 / N1 擇一（須等於指定級別）",
-    "examples": [
-      {"jp": "日文例句（含漢字，≤ 25 字）", "kana": "整句假名讀音", "zh": "繁中翻譯"}
-    ]
-  }
-]
-
-# 數量規範
-- array 含 3-5 個文法句型，皆須符合指定 JLPT 級別、且不可是過於基礎的重複。
-- 每個句型 examples 含 2 句，自然口語、貼合該文型。
-
-# 級別差異
-- N5: は/が/を/へ、です・ます、〜たい、〜があります
-- N4: て形、〜たことがある、〜なければならない、授受動詞
-- N3: 〜によって、〜わけだ、〜に基づいて、被動使役
-- N2: 〜にもかかわらず、〜つつある、〜を通じて、接續詞
-- N1: 〜を余儀なくされる、〜にとどまらず、〜をもって、慣用句
 """
 
 
@@ -415,6 +415,115 @@ def gen_reading(topic: str, level: str, tier: str) -> dict:
     return json.loads(m.group(0))
 
 
+def clean_subtitle_text(raw: str) -> str:
+    """清理字幕：移除 SRT 序號、時間軸（含 --> 的行）、HTML 標籤與空行。"""
+    out = []
+    for ln in raw.splitlines():
+        s = ln.strip()
+        if not s or s.isdigit() or "-->" in s:
+            continue
+        s = re.sub(r"<[^>]+>", "", s)
+        if s:
+            out.append(s)
+    return "\n".join(out)
+
+
+GRAMMAR_GEN_PROMPT = """你是 JLPT 日文文法教材編輯。使用者給「JLPT 級別」與「已存在的文法（不可重複）」，
+你要產出該級別**新的、不重複**的核心文法點，難度需貼合該級別。
+
+# 嚴格輸出 JSON（只輸出 JSON array，前後不得有任何文字、不得包 markdown code fence）
+[
+  {
+    "point": "文型（如 〜ようとする）",
+    "meaning": "繁中一句話意義",
+    "usage": "繁中用法說明（接續、語感、常見搭配）",
+    "examples": [
+      {"jp": "日文例句（含漢字）", "kana": "整句假名", "zh": "繁中翻譯"},
+      {"jp": "第二個例句", "kana": "整句假名", "zh": "繁中翻譯"}
+    ]
+  }
+]
+
+# 規範
+- 嚴禁與「已存在文法」清單重複。
+- 每個文法務必含 2 個以上例句，每句都要 kana 假名。
+- 難度貼合級別：N5 最基礎、N1 最進階。
+"""
+
+
+def gen_grammar_batch(level: str, existing_points: list, n: int, tier: str) -> list:
+    """為指定級別生成 n 個不重複的新文法點。回傳 list（每筆含 level 欄位）。"""
+    existing = "、".join(existing_points) if existing_points else "（無）"
+    text = _llm_generate(
+        GRAMMAR_GEN_PROMPT,
+        f"JLPT 級別：{level}\n要生成數量：{n}\n已存在文法（不可重複）：{existing}",
+        tier, max_tokens=8000)
+    items = extract_json_array(text)
+    out = []
+    have = {p for p in existing_points}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        point = (it.get("point") or "").strip()
+        if not point or point in have:
+            continue
+        if not it.get("meaning") or not isinstance(it.get("examples"), list):
+            continue
+        it["level"] = level
+        out.append(it)
+        have.add(point)
+    return out
+
+
+@st.cache_data(show_spinner=False)
+def _load_grammar_bank_cached(_mtime: float) -> list:
+    try:
+        with open(GRAMMAR_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_grammar_bank() -> list:
+    """讀取 grammar_bank.json（AI 生成且已永久保存的文法清單，含 level 欄位）。"""
+    try:
+        mtime = os.path.getmtime(GRAMMAR_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_grammar_bank_cached(mtime)
+
+
+@st.cache_data(show_spinner=False)
+def _load_dialogue_bank_cached(_mtime: float) -> list:
+    try:
+        with open(DIALOGUE_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_dialogue_bank() -> list:
+    """讀取 dialogue_bank.json（AI 生成且已永久保存的對話清單，含 level 欄位）。"""
+    try:
+        mtime = os.path.getmtime(DIALOGUE_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_dialogue_bank_cached(mtime)
+
+
+def gen_subtitle_lesson(raw_text: str, level: str, tier: str) -> dict:
+    """把貼上的日文台詞／字幕轉成互動學習課程（結構同閱讀條目）。"""
+    cleaned = clean_subtitle_text(raw_text)[:4000]
+    text = _llm_generate(SUBTITLE_GEN_PROMPT,
+                         f"級別參考：{level}\n台詞：\n{cleaned}", tier, max_tokens=6000)
+    m = re.search(r"\{[\s\S]*\}", text)
+    if not m:
+        raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
+    return json.loads(m.group(0))
+
+
 def gen_dialogue(scenario: str, level: str, tier: str) -> dict:
     """呼叫 Gemini 產出一段生活對話練習。"""
     text = _llm_generate(DIALOGUE_GEN_PROMPT, f"情境：{scenario}\n級別：{level}",
@@ -423,24 +532,6 @@ def gen_dialogue(scenario: str, level: str, tier: str) -> dict:
     if not m:
         raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
     return json.loads(m.group(0))
-
-
-def gen_grammar(level: str, tier: str, topic: str = "") -> list:
-    """呼叫 Gemini 產出一批該級別的文法解說（list of dict）。"""
-    user = f"級別：{level}"
-    if topic.strip():
-        user += f"\n主題／想學的文型：{topic.strip()}"
-    text = _llm_generate(GRAMMAR_GEN_PROMPT, user, tier, max_tokens=6000)
-    items = extract_json_array(text)
-    # 補上 jlpt，並過濾不完整項
-    out = []
-    for it in items:
-        if not isinstance(it, dict) or not it.get("point") or not it.get("meaning"):
-            continue
-        it.setdefault("jlpt", level)
-        it.setdefault("examples", [])
-        out.append(it)
-    return out
 
 
 # ===========================================================================
@@ -529,6 +620,92 @@ def load_vocab_bank() -> dict:
     return _load_vocab_bank_cached(mtime)
 
 
+# ---------------------------------------------------------------------------
+# 閱讀永久庫（AI 生成 → 寫本機 + 推回 GitHub，資料庫越長越大）
+# ---------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
+def _load_readings_bank_cached(_mtime: float) -> list:
+    try:
+        with open(READINGS_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_readings_bank() -> list:
+    """讀取 readings_bank.json（AI 生成且已永久保存的日文閱讀清單）。"""
+    try:
+        mtime = os.path.getmtime(READINGS_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_readings_bank_cached(mtime)
+
+
+def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
+    """通用 GitHub Contents API 寫檔：檔案不存在則建立、存在則更新。回傳 (ok, info)。"""
+    import base64
+    import urllib.error
+    import urllib.request
+
+    token = get_github_token()
+    if not token:
+        return False, {"stage": "token", "msg": "未設定 GITHUB_TOKEN"}
+    repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
+    branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
+    api = f"https://api.github.com/repos/{repo}/contents/{path}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "User-Agent": "japanese-learn-cloud",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    sha = None
+    try:
+        req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            current = json.loads(r.read())
+        sha = current.get("sha")
+        # 與遠端現有內容聯集，避免覆蓋造成倒退流失（list 依 id/title 去重、dict 直接合併）
+        try:
+            remote = json.loads(base64.b64decode(current.get("content", "")).decode("utf-8"))
+            new = json.loads(payload_json)
+            if isinstance(remote, list) and isinstance(new, list):
+                seen, union = set(), []
+                for item in remote + new:
+                    if isinstance(item, dict):
+                        key = (item.get("id") or item.get("title") or item.get("point")
+                               or json.dumps(item, ensure_ascii=False, sort_keys=True))
+                    else:
+                        key = item
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    union.append(item)
+                payload_json = json.dumps(union, ensure_ascii=False, indent=2) + "\n"
+            elif isinstance(remote, dict) and isinstance(new, dict):
+                payload_json = json.dumps({**remote, **new}, ensure_ascii=False, indent=2) + "\n"
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001 - 404 = 首次建立
+        sha = None
+    body = {"message": commit_msg,
+            "content": base64.b64encode(payload_json.encode("utf-8")).decode("ascii"),
+            "branch": branch}
+    if sha:
+        body["sha"] = sha
+    try:
+        req2 = urllib.request.Request(api, data=json.dumps(body).encode("utf-8"),
+                                      method="PUT",
+                                      headers={**headers, "Content-Type": "application/json"})
+        with urllib.request.urlopen(req2, timeout=20) as r:
+            json.loads(r.read())
+        return True, {"branch": branch}
+    except urllib.error.HTTPError as e:
+        return False, {"stage": "PUT", "code": e.code,
+                       "body": e.read().decode("utf-8", "replace")[:200]}
+    except Exception as e:  # noqa: BLE001
+        return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
+
+
 def generate_vocab_batch(words: list, tier: str) -> list:
     """呼叫 Gemini 一次生成一批日文單字的 JSON 資料。words 為 [(word, level), ...] 或 [word]。"""
     items = []
@@ -565,12 +742,8 @@ def _repo_default_branch(repo: str, token: str) -> str:
         return "main"
 
 
-def push_json_to_github(payload, repo_path: str, commit_msg: str):
-    """把任一 JSON 物件透過 GitHub Contents API 推回 repo 指定路徑。回傳 (ok, info)。
-
-    通用版：vocab_bank / grammar_bank / passage_bank 皆共用同一套分支偵測與
-    首次建檔（404/422）處理邏輯。
-    """
+def push_bank_to_github(merged: dict, silent: bool = False):
+    """把合併後的 vocab_bank 透過 GitHub Contents API 推回 repo。回傳 (ok, info)。"""
     import base64
     import urllib.error
     import urllib.request
@@ -582,9 +755,10 @@ def push_json_to_github(payload, repo_path: str, commit_msg: str):
     repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
     # 分支：優先用 GITHUB_BRANCH secret；未設則自動偵測 repo 預設分支（本 repo 無 main）
     branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
-    payload_json = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
+    path = "vocab_bank.json"
+    payload_json = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
 
-    api = f"https://api.github.com/repos/{repo}/contents/{repo_path}"
+    api = f"https://api.github.com/repos/{repo}/contents/{path}"
     headers = {"Authorization": f"Bearer {token}",
                "Accept": "application/vnd.github+json",
                "User-Agent": "japanese-learn-cloud",
@@ -595,7 +769,16 @@ def push_json_to_github(payload, repo_path: str, commit_msg: str):
     try:
         req = urllib.request.Request(f"{api}?ref={branch}", headers=headers)
         with urllib.request.urlopen(req, timeout=15) as r:
-            sha = json.loads(r.read())["sha"]
+            current = json.loads(r.read())
+        sha = current["sha"]
+        # 與遠端現有 vocab_bank 聯集，避免用較舊本機檔覆蓋造成字數倒退流失。
+        try:
+            remote = json.loads(base64.b64decode(current.get("content", "")).decode("utf-8"))
+            if isinstance(remote, dict):
+                merged = {**remote, **merged}  # 遠端為底，本機/session 疊上 → 只增不減
+                payload_json = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
+        except Exception:  # noqa: BLE001
+            pass
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", "replace")[:600]
         # 檔案還沒建立（分支存在但無此檔）→ 視為首次建立，繼續走 PUT。
@@ -608,7 +791,7 @@ def push_json_to_github(payload, repo_path: str, commit_msg: str):
 
     try:
         put_payload = {
-            "message": commit_msg,
+            "message": f"vocab_bank: cloud append（共 {len(merged)} 字）",
             "content": base64.b64encode(payload_json.encode("utf-8")).decode("ascii"),
             "branch": branch,
         }
@@ -627,42 +810,3 @@ def push_json_to_github(payload, repo_path: str, commit_msg: str):
                        "repo": repo, "branch": branch}
     except Exception as e:  # noqa: BLE001
         return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
-
-
-def push_bank_to_github(merged: dict, silent: bool = False):
-    """把合併後的 vocab_bank 推回 repo（相容舊介面）。"""
-    return push_json_to_github(
-        merged, "vocab_bank.json", f"vocab_bank: cloud append（共 {len(merged)} 字）")
-
-
-# ---------------------------------------------------------------------------
-# grammar_bank / passage_bank：AI 生成的文法與範例短文，可累加並推回 repo
-# ---------------------------------------------------------------------------
-def _load_list_bank(path: str) -> list:
-    """讀取一個「list of dict」型 bank 檔；失敗回空清單。"""
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def load_grammar_bank() -> list:
-    """讀取 grammar_bank.json（AI 生成文法，list of dict）。"""
-    return _load_list_bank(GRAMMAR_BANK_FILE)
-
-
-def load_passage_bank() -> list:
-    """讀取 passage_bank.json（AI 生成範例短文，list of dict）。"""
-    return _load_list_bank(PASSAGE_BANK_FILE)
-
-
-def push_grammar_bank(items: list):
-    return push_json_to_github(
-        items, "grammar_bank.json", f"grammar_bank: cloud append（共 {len(items)} 條）")
-
-
-def push_passage_bank(items: list):
-    return push_json_to_github(
-        items, "passage_bank.json", f"passage_bank: cloud append（共 {len(items)} 篇）")

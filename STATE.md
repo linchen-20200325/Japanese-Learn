@@ -16,35 +16,25 @@
 ## 📁 核心檔案
 | 檔案 | 角色 | 狀態 |
 |------|------|------|
-| `app.py` | Streamlit 主程式（功能：📊儀表板／50音／🃏單字卡／文法／💬情境會話／📖單字庫／🔁複習） | ✅ 已完成 |
-| `ai.py` | Gemini 互動層（多金鑰輪轉、主題式生成、vocab/grammar/passage bank 讀寫與 GitHub 推回） | ✅ 已完成 |
+| `app.py` | Streamlit 主程式（7 功能：50音／核心單字庫／單字卡／文法／💬情境會話／AI互動閱讀／單字庫／複習） | ✅ 已完成 |
+| `ai.py` | Gemini 互動層（多金鑰輪轉、主題式生成、vocab_bank 讀寫與 GitHub 推回） | ✅ 已完成 |
 | `data.py` | 資料存取層（從 `db/` 載入 JSON，含快取） | ✅ 已完成 |
 | `db/N1.json`～`db/N5.json` | 各級別資料庫（單字／文法／短文／文章） | ✅ 已完成 |
 | `db/gojuon.json` | 50 音資料庫（清音／濁音／半濁音／拗音） | ✅ 已完成 |
-| `vocab_bank.json` | AI 生成的大單字庫（可推回 repo 永久保存） | ✅ 已完成 |
-| `grammar_bank.json` | AI 生成的文法庫（list，可累加並推回 repo） | ✅ 已完成 |
-| `passage_bank.json` | AI 生成的範例短文庫（list，可累加並推回 repo） | ✅ 已完成 |
+| `vocab_bank.json` | AI 生成的大單字庫（Gemini 批次生成，可推回 repo 永久保存） | ✅ 已完成 |
 | `scripts/generate_vocab.py` | 本機批次生成單字（讀 `vocab_wordlist.txt`） | ✅ 已完成 |
 | `requirements.txt` | 相依套件（streamlit、gTTS、google-genai） | ✅ 已完成 |
 | `CLAUDE.md` / `STATE.md` | 開發協議 / 本戰情室 | ✅ 已完成 |
 
-## 🔀 介面整併與功能擴充（最新）
-- **四合一情境會話**：原「情境短文／AI 情境生成／AI 生活對話／AI 互動閱讀」合併為單一
-  「💬 情境會話」（`page_scenario`），底下四分頁：📄 範例短文／🗣️ AI 生活對話／
-  🤖 AI 情境心智圖／📚 AI 互動閱讀。
-- **移除重複的「核心單字庫」**：與「🃏 單字卡」重複，依使用者決定只保留單字卡
-  （翻面記憶＋諧音＋發音；deck 自動合併核心單字與 AI 單字庫）。
-- **文法頁三分頁**：`page_grammar` 改為「📘 核心解說／🤖 AI 生成（累加）／🗂️ 文法庫查看」。
-  - AI 生成：依級別（可附主題）用 Gemini 產 3–5 條文法，累加到 `grammar_bank.json`。
-  - 文法庫查看：可瀏覽核心＋AI 全部文法、下載 JSON、推回 GitHub。
-- **範例短文可累加 AI 生成**：`page_passage` 加「🤖 用 AI 生成新的範例短文」，
-  生成後累加到 `passage_bank.json`，與核心短文一起出現在選單。
-- **AI bank 永久保存**：grammar/passage 比照 vocab，`ai.push_json_to_github` 通用化，
-  設 `GITHUB_TOKEN` 後自動推回；`_record_list_push` 推回成功同步寫回本機檔。
-- **回推分支修正**：`_repo_default_branch` 自動偵測預設分支（本 repo 無 main），
-  並支援該分支首次建檔（404/422 處理）。
-- 主題式生成在 `ai.py`（`gen_dialogue` / `gen_reading` / `gen_grammar` / `generate_material`），
-  多把 Gemini 金鑰自動輪轉，金鑰貼到 Streamlit Cloud → Settings → Secrets（勿入 repo）。
+## 🔀 本次整併（以最新版 AI App 為底）
+- **三合一**：原「情境短文與進級／🤖 AI 情境生成／🗣️ AI 生活對話」三個重複功能，
+  合併為單一「💬 情境會話」（`page_scenario`），底下分頁：📄 範例短文（免金鑰）／🗣️ AI 生活對話／🤖 AI 情境心智圖。
+- **修正「資料庫不會更新」bug**：AI 生成單字推回 GitHub 成功後，原本只清 `live_bank`、
+  未寫回本機 `vocab_bank.json`，導致畫面停在舊字數。現於 `_record_push` 推回成功時
+  同步寫回本機並清快取，字數即時更新（與英文版同因同修）。
+- **核心單字擴充**：N5 12→24、N4 10→24、N3 10→22（保留並沿用）。
+- 主題式生成已內建於 `ai.py`（`gen_dialogue` / `gen_reading` / `generate_material`），
+  多把 Gemini 金鑰自動輪轉，金鑰請貼到 Streamlit Cloud → Settings → Secrets（勿入 repo）。
 
 ## 🗂️ 資料庫結構（db/）
 - 每個級別一個 JSON 檔，內含三大區塊：
