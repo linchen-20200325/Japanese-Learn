@@ -147,6 +147,21 @@ def _to_katakana(s: str) -> str:
     )
 
 
+def _level_items(file_items: list, sess_key: str, level, key_field: str) -> list:
+    """合併「部署檔 + 本 session 生成」並去重（Cloud 唯讀寫不進本機，故顯示一律疊上 session）。"""
+    sess = st.session_state.get(sess_key, [])
+    out, seen = [], set()
+    for it in list(file_items) + list(sess):
+        if level is not None and it.get("level") != level:
+            continue
+        k = it.get(key_field) or it.get("title") or it.get("point")
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(it)
+    return out
+
+
 def page_gojuon(level: str) -> None:
     """50 音（基礎，僅 N5）：可切換平假名／片假名。"""
     st.header("🈁 50 音入門")
@@ -237,7 +252,10 @@ def page_vocab(level: str) -> None:
 
 
 def _persist_grammar(items: list, level: str) -> tuple:
-    """把 AI 生成的文法加入永久庫：寫本機 + 推回 GitHub，文法資料庫持續長大。"""
+    """把 AI 生成的文法加入永久庫：session 疊加層（立即可見）+ 推回 GitHub。"""
+    for it in items:
+        it.setdefault("level", level)
+    st.session_state.setdefault("_sess_grammar", []).extend(items)  # 立即可見
     bank = list(ai.load_grammar_bank())
     have = {(g.get("level"), g.get("point")) for g in bank}
     added = 0
@@ -277,7 +295,7 @@ def page_grammar(level: str) -> None:
     st.caption("每個文法皆含意義、用法說明與多組例句（可顯示唸法與中文）。")
 
     db_grammar = data.load_grammar(level)
-    bank_grammar = [g for g in ai.load_grammar_bank() if g.get("level") == level]
+    bank_grammar = _level_items(ai.load_grammar_bank(), "_sess_grammar", level, "point")
 
     # 🤖 AI 生成新文法（不重複，擴充資料庫）
     if st.session_state.pop("_gram_saved", None) is not None:
@@ -571,7 +589,8 @@ def page_flashcards(level: str) -> None:
 
     bank = ai.load_vocab_bank()
     live = st.session_state.get("live_bank", {})
-    full_bank = {**bank, **live}
+    synced = st.session_state.get("synced_bank", {})
+    full_bank = {**bank, **synced, **live}
 
     deck = []
     for w in data.load_vocab(level):
@@ -780,7 +799,8 @@ def page_vocab_bank(level: str) -> None:
         )
     file_bank = ai.load_vocab_bank()
     live_bank = st.session_state.setdefault("live_bank", {})
-    bank = {**file_bank, **live_bank}
+    synced = st.session_state.get("synced_bank", {})
+    bank = {**file_bank, **synced, **live_bank}
     api_key = ai.get_api_key()
 
     with st.expander("🤖 用 AI 在雲端即時生成（無需本機）", expanded=not bank):
@@ -811,8 +831,8 @@ def page_vocab_bank(level: str) -> None:
             wl = len(load_wordlist())
         except Exception:  # noqa: BLE001
             wl = 0
-        st.caption(f"詞表 {wl} 字　·　已完成 {len(bank)} 字"
-                   f"　·　📁 repo 已存 {len(file_bank)} 字 / 🌱 session 新增 {len(live_bank)} 字")
+        st.caption(f"詞表 {wl} 字　·　已完成 **{len(bank)}** 字"
+                   f"　·　📁 部署檔 {len(file_bank)} / ☁️ 已推 GitHub {len(synced)} / 🌱 待推 {len(live_bank)}")
         last = st.session_state.get("_last_push")
         if last:
             (st.success if last["ok"] else st.error)(
@@ -902,16 +922,19 @@ def _record_push(ok: bool, info: dict, merged: dict | None = None) -> None:
     st.session_state["_last_push"] = {"ok": ok, "ts": _dt.datetime.now().strftime("%H:%M:%S")}
     if ok:
         st.session_state.pop("_push_error", None)
+        # 嘗試寫本機（Cloud /mount/src 多唯讀，靜默失敗，故不依賴它）
         if merged is not None:
             try:
                 with open(ai.VOCAB_BANK_FILE, "w", encoding="utf-8") as f:
                     json.dump(merged, f, ensure_ascii=False, indent=2)
-                if hasattr(ai.load_vocab_bank, "clear"):
-                    ai.load_vocab_bank.clear()
-                if hasattr(ai._load_vocab_bank_cached, "clear"):
-                    ai._load_vocab_bank_cached.clear()
+                for fn in (ai.load_vocab_bank, ai._load_vocab_bank_cached):
+                    if hasattr(fn, "clear"):
+                        fn.clear()
             except OSError:
                 pass
+        # 關鍵：把已推回的字移進 session「已同步層」(不清空)，畫面才會立即顯示新總數
+        live = st.session_state.get("live_bank", {})
+        st.session_state.setdefault("synced_bank", {}).update(live)
         st.session_state["live_bank"] = {}
     else:
         st.session_state["_push_error"] = info
@@ -922,7 +945,8 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     from scripts.generate_vocab import load_wordlist
     file_bank = ai.load_vocab_bank()
     live = st.session_state.setdefault("live_bank", {})
-    have = set(file_bank) | set(live)
+    synced = st.session_state.get("synced_bank", {})
+    have = set(file_bank) | set(live) | set(synced)
     todo = [w for w in load_wordlist() if w["word"] not in have][:n]
     if not todo:
         st.success("詞表已全數完成，沒有待補單字。可編輯 `scripts/vocab_wordlist.txt` 增字。")
@@ -1145,7 +1169,7 @@ def page_ai_dialogue(level: str) -> None:
             st.rerun()
 
     # 📚 已累積的對話（永久庫，越長越多）
-    bank = [d for d in ai.load_dialogue_bank() if d.get("level") == level]
+    bank = _level_items(ai.load_dialogue_bank(), "_sess_dialogue", level, "id")
     if bank:
         st.divider()
         st.markdown(f"### 📚 已累積的對話（{level} 共 {len(bank)} 段）")
@@ -1193,6 +1217,7 @@ def _persist_reading_jp(reading: dict, level: str) -> tuple:
     rid = reading.get("id") or reading.get("title", "")
     reading["id"] = rid if rid and rid not in ids else f"{rid or 'rd'}-{len(bank)}"
     bank.append(reading)
+    st.session_state.setdefault("_sess_readings", []).append(reading)  # 立即可見
     payload = json.dumps(bank, ensure_ascii=False, indent=2) + "\n"
     try:
         with open(ai.READINGS_BANK_FILE, "w", encoding="utf-8") as f:
@@ -1215,6 +1240,7 @@ def _persist_dialogue_jp(dlg: dict, level: str) -> tuple:
     rid = dlg.get("id") or dlg.get("title", "")
     dlg["id"] = rid if rid and rid not in ids else f"{rid or 'dlg'}-{len(bank)}"
     bank.append(dlg)
+    st.session_state.setdefault("_sess_dialogue", []).append(dlg)  # 立即可見
     payload = json.dumps(bank, ensure_ascii=False, indent=2) + "\n"
     try:
         with open(ai.DIALOGUE_BANK_FILE, "w", encoding="utf-8") as f:
@@ -1331,7 +1357,7 @@ def page_ai_reading(level: str) -> None:
             st.rerun()
 
     # 📚 已累積的閱讀（永久庫，越長越多，重整不消失）
-    bank = ai.load_readings_bank()
+    bank = _level_items(ai.load_readings_bank(), "_sess_readings", None, "id")
     if bank:
         st.divider()
         st.markdown(f"### 📚 已累積的閱讀（共 {len(bank)} 篇）")
