@@ -1487,6 +1487,65 @@ def page_vocab_all(level: str) -> None:
         page_vocab_bank(level)
 
 
+def page_library(level: str) -> None:
+    """📚 我的資料庫：所有 AI 生成並累積的內容（單字/文法/對話/閱讀）集中瀏覽。"""
+    st.header("📚 我的資料庫")
+    st.caption("所有 AI 生成、累積的內容都在這裡瀏覽——這些都會推到 GitHub 永久保存、持續長大。")
+
+    vocab = {**ai.load_vocab_bank(),
+             **st.session_state.get("synced_bank", {}),
+             **st.session_state.get("live_bank", {})}
+    grammar = _level_items(ai.load_grammar_bank(), "_sess_grammar", None, "point")
+    dialogue = _level_items(ai.load_dialogue_bank(), "_sess_dialogue", None, "id")
+    reading = _level_items(ai.load_readings_bank(), "_sess_readings", None, "id")
+
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("📗 單字", len(vocab))
+    m2.metric("📐 文法", len(grammar))
+    m3.metric("🗣️ 對話", len(dialogue))
+    m4.metric("📚 閱讀／字幕", len(reading))
+
+    t_v, t_g, t_d, t_r = st.tabs(["📗 單字", "📐 文法", "🗣️ 對話", "📚 閱讀／字幕"])
+    with t_v:
+        if not vocab:
+            st.info("還沒有 AI 單字。到「📖 單字庫 → 🤖 AI 單字庫」按生成。")
+        else:
+            q = st.text_input("搜尋（日文／中文／諧音）", key="lib_vq").strip()
+            words = sorted(vocab)
+            if q:
+                words = [w for w in words if q in w
+                         or q in (vocab[w].get("meaning_zh") or "")
+                         or q in (vocab[w].get("mnemonic") or "")]
+            st.caption(f"共 {len(vocab)} 字　·　符合 {len(words)} 字（最多顯示 80）")
+            for w in words[:80]:
+                e = vocab[w]
+                st.markdown(f"**{w}**　{e.get('kana','')}　— {e.get('meaning_zh','')}"
+                            + (f"　📣 {e['mnemonic']}" if e.get("mnemonic") else ""))
+    with t_g:
+        if not grammar:
+            st.info("還沒有 AI 文法。到「文法解說核心 → 🤖 AI 生成」建立。")
+        for g in grammar:
+            with st.expander(f"[{g.get('level','')}] {g.get('point','')}　—　{g.get('meaning','')}"):
+                if g.get("usage"):
+                    st.caption(f"💡 {g['usage']}")
+                for ex in g.get("examples", []):
+                    st.markdown(f"- {ex.get('jp','')}（{ex.get('zh','')}）")
+    with t_d:
+        if not dialogue:
+            st.info("還沒有 AI 對話。到「🗣️ AI 生活對話」生成。")
+        for d in dialogue:
+            with st.expander(f"[{d.get('level','')}] {d.get('title','')}　{d.get('title_zh','')}"):
+                for ln in d.get("lines", []):
+                    st.markdown(f"**{ln.get('speaker','')}**：{ln.get('jp','')}（{ln.get('zh','')}）")
+    with t_r:
+        if not reading:
+            st.info("還沒有 AI 閱讀。到「📚 AI 互動閱讀」或「🎬 影視字幕」生成。")
+        for r in reading:
+            with st.expander(f"[{r.get('level','')}] {r.get('title','')}　{r.get('title_zh','')}"):
+                for s in r.get("sentences", []):
+                    st.markdown(f"- {s.get('jp','')}（{s.get('zh','')}）")
+
+
 def render_ai_sidebar() -> None:
     """側欄顯示 Gemini key 與 GitHub Token 狀態 + 一鍵測試。"""
     st.sidebar.divider()
@@ -1654,7 +1713,7 @@ def main() -> None:
         functions.append("50音")
     functions += ["📖 單字庫", "文法解說核心", "📝 測驗練習",
                   "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
-                  "🎬 影視字幕", "🔁 複習"]
+                  "🎬 影視字幕", "📚 我的資料庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
 
@@ -1696,6 +1755,8 @@ def main() -> None:
         page_ai_reading(level)
     elif feature == "🎬 影視字幕":
         page_subtitles(level)
+    elif feature == "📚 我的資料庫":
+        page_library(level)
     elif feature == "🔁 複習":
         page_review()
 
