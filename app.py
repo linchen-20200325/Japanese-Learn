@@ -50,10 +50,14 @@ def load_data() -> dict:
                 d = json.load(f)
             d.setdefault("review_cards", [])
             d.setdefault("lessons", [])
+            d.setdefault("progress", {})
+            d.setdefault("quiz", {})
+            d.setdefault("favorites", {})
             return d
         except (json.JSONDecodeError, OSError):
             pass
-    return {"review_cards": [], "lessons": []}
+    return {"review_cards": [], "lessons": [], "progress": {}, "quiz": {},
+            "favorites": {}}
 
 
 def save_data() -> None:
@@ -62,6 +66,19 @@ def save_data() -> None:
             json.dump(st.session_state.app_data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def save_progress() -> None:
+    """把各級別進度（set）與測驗統計同步寫回 app_data 並持久化。
+
+    progress 以 set 存於 session（成員為已學會單字 kanji），存檔前轉成 list；
+    quiz 為各級別答對/總題數統計。兩者皆併入 app_data 一起寫進 dashboard_data.json，
+    重整／重啟瀏覽器仍保留（Cloud 重新部署為暫存，會重置）。
+    """
+    st.session_state.app_data["progress"] = {
+        lv: sorted(s) for lv, s in st.session_state.progress.items()}
+    st.session_state.app_data["quiz"] = st.session_state.quiz
+    save_data()
 
 
 # ===========================================================================
@@ -114,18 +131,29 @@ def render_examples(examples: list, key_prefix: str) -> None:
 # Session State：各級別獨立進度
 # ===========================================================================
 def init_state() -> None:
-    """初始化各級別獨立的學習進度容器（僅執行一次）。"""
+    """初始化各級別獨立的學習進度容器（僅執行一次）。
+
+    progress / quiz 會從持久化的 app_data 還原（重整不歸零）；缺漏的級別補空值，
+    確保新增級別時不 KeyError。
+    """
+    if "app_data" not in st.session_state:
+        # 複習卡、已存課程、進度與測驗（全持久化於 dashboard_data.json）
+        st.session_state.app_data = load_data()
+    saved = st.session_state.app_data
+
     if "progress" not in st.session_state:
-        # 每個級別獨立記錄已學會的單字（以 kanji 作為唯一鍵）
-        st.session_state.progress = {lv: set() for lv in data.LEVEL_ORDER}
+        # 每個級別獨立記錄已學會的單字（以 kanji 作為唯一鍵）；從存檔的 list 還原成 set
+        saved_prog = saved.get("progress", {})
+        st.session_state.progress = {
+            lv: set(saved_prog.get(lv, [])) for lv in data.LEVEL_ORDER}
     if "quiz" not in st.session_state:
         # 每個級別獨立的測驗統計
+        saved_quiz = saved.get("quiz", {})
         st.session_state.quiz = {
-            lv: {"correct": 0, "total": 0} for lv in data.LEVEL_ORDER
+            lv: {"correct": saved_quiz.get(lv, {}).get("correct", 0),
+                 "total": saved_quiz.get(lv, {}).get("total", 0)}
+            for lv in data.LEVEL_ORDER
         }
-    if "app_data" not in st.session_state:
-        # 複習卡與已存課程（全級別共用，持久化於 dashboard_data.json）
-        st.session_state.app_data = load_data()
 
 
 def mark_learned(level: str, kanji: str) -> None:
@@ -135,6 +163,33 @@ def mark_learned(level: str, kanji: str) -> None:
 
 def learned_count(level: str) -> int:
     return len(st.session_state.progress[level])
+
+
+# ===========================================================================
+# 收藏（我的最愛）— 跨級別、持久化於 app_data.favorites
+# ===========================================================================
+def _favorites() -> dict:
+    """回傳 favorites dict：{ word: {kana, meaning_zh, level} }。"""
+    return st.session_state.app_data.setdefault("favorites", {})
+
+
+def is_favorite(word: str) -> bool:
+    return word in _favorites()
+
+
+def toggle_favorite(word: str, info: dict) -> bool:
+    """切換收藏狀態並持久化。回傳切換後是否為已收藏。"""
+    favs = _favorites()
+    if word in favs:
+        del favs[word]
+        result = False
+    else:
+        favs[word] = {"kana": info.get("kana", ""),
+                      "meaning_zh": info.get("meaning_zh", ""),
+                      "level": info.get("level", "")}
+        result = True
+    save_data()
+    return result
 
 
 # ===========================================================================
@@ -236,6 +291,7 @@ def page_vocab(level: str) -> None:
                         learned.discard(word["kanji"])
                     else:
                         mark_learned(level, word["kanji"])
+                    save_progress()
                     st.rerun()
 
             with st.expander("👀 顯示中文與唸法"):
@@ -371,68 +427,7 @@ def page_passage(level: str) -> None:
                     st.caption(f"🇹🇼 {sent.get('zh', '')}")
 
     st.divider()
-    _vocab_quiz(level)
-
-
-def _vocab_quiz(level: str) -> None:
-    """以本級別單字產生「中翻日（選假名）」小測驗。"""
-    st.subheader("🎯 進級小測驗")
-    vocab = data.load_vocab(level)
-    if len(vocab) < 2:
-        st.info("單字不足，無法產生測驗。")
-        return
-
-    quiz_key = f"current_quiz_{level}"
-    # 為每個級別維持一題當前題目，切換級別不互相干擾。
-    if quiz_key not in st.session_state:
-        st.session_state[quiz_key] = _new_question(vocab)
-
-    q = st.session_state[quiz_key]
-    st.write(f"請問「**{q['prompt']}**」的正確唸法（假名）是？")
-
-    choice = st.radio(
-        "選擇答案：",
-        q["options"],
-        key=f"quiz_choice_{level}_{q['nonce']}",
-        index=None,
-    )
-
-    col_submit, col_next = st.columns(2)
-    with col_submit:
-        if st.button("送出答案", key=f"submit_{level}_{q['nonce']}"):
-            stats = st.session_state.quiz[level]
-            stats["total"] += 1
-            if choice == q["answer"]:
-                stats["correct"] += 1
-                st.success("正解！🎉")
-            else:
-                st.error(f"再加油！正確答案是：{q['answer']}")
-    with col_next:
-        if st.button("下一題 ➡️", key=f"next_{level}_{q['nonce']}"):
-            st.session_state[quiz_key] = _new_question(vocab)
-            st.rerun()
-
-    stats = st.session_state.quiz[level]
-    if stats["total"]:
-        st.caption(
-            f"本級別測驗紀錄：答對 {stats['correct']} / {stats['total']} 題"
-            f"（正確率 {stats['correct'] / stats['total']:.0%}）"
-        )
-
-
-def _new_question(vocab: list) -> dict:
-    """產生一道測驗題（中文 → 選假名）。"""
-    target = random.choice(vocab)
-    distractors = [w for w in vocab if w["kanji"] != target["kanji"]]
-    sample = random.sample(distractors, k=min(3, len(distractors)))
-    options = [target["kana"]] + [w["kana"] for w in sample]
-    random.shuffle(options)
-    return {
-        "prompt": target["chinese"],
-        "answer": target["kana"],
-        "options": options,
-        "nonce": random.randint(0, 10**9),
-    }
+    st.info("想做測驗？請到側邊欄「📝 測驗練習」，有中→假名、日→中、聽發音、文法等題型。")
 
 
 # ===========================================================================
@@ -598,6 +593,7 @@ def page_flashcards(level: str) -> None:
         deck.append({"word": w["kanji"], "kana": w["kana"], "romaji": w["romaji"],
                      "meaning_zh": w["chinese"], "usage_zh": w.get("usage") or w.get("grammar", ""),
                      "pos": w.get("pos", ""),
+                     "mnemonic": w.get("mnemonic", ""), "image": w.get("image", ""),
                      "example_jp": ex.get("jp", ""), "example_zh": ex.get("zh", ""),
                      "src": "core"})
     have = {d["word"] for d in deck}
@@ -662,7 +658,7 @@ def page_flashcards(level: str) -> None:
             if card.get("pos"):
                 st.caption(f"詞性：{card['pos']}")
 
-    b1, b2, b3, b4, b5 = st.columns(5)
+    b1, b2, b3, b4, b5, b6 = st.columns(6)
     if b1.button("← 上一個", use_container_width=True, key=f"fc_prev_{level}"):
         st.session_state[ikey] = (idx - 1) % len(deck)
         st.session_state[fkey] = False
@@ -677,13 +673,20 @@ def page_flashcards(level: str) -> None:
             learned.discard(card["word"])
         else:
             learned.add(card["word"])
+        save_progress()
         st.rerun()
-    if b4.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
-        import random
+    faved = is_favorite(card["word"])
+    if b4.button("⭐ 已收藏" if faved else "☆ 收藏",
+                 use_container_width=True, key=f"fc_fav_{level}"):
+        toggle_favorite(card["word"], {"kana": card.get("kana", ""),
+                                       "meaning_zh": card.get("meaning_zh", ""),
+                                       "level": level})
+        st.rerun()
+    if b5.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
         st.session_state[ikey] = random.randrange(len(deck))
         st.session_state[fkey] = False
         st.rerun()
-    if b5.button("下一個 →", use_container_width=True, key=f"fc_next_{level}"):
+    if b6.button("下一個 →", use_container_width=True, key=f"fc_next_{level}"):
         st.session_state[ikey] = (idx + 1) % len(deck)
         st.session_state[fkey] = False
         st.rerun()
@@ -711,27 +714,35 @@ def page_ai_generate(level: str) -> None:
         )
         return
 
-    with st.form(f"gen_form_{level}", clear_on_submit=False):
-        scenario = st.text_input("目標情境",
-                                 placeholder="例如：在餐廳點餐並反映送錯餐點")
-        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS)
-        submitted = st.form_submit_button("生成 ✨", type="primary")
+    rand = st.button("🎲 隨機生成情境", type="primary", use_container_width=True,
+                     key=f"gen_rand_{level}")
+    with st.expander("✍️ 想指定情境自己生成？", expanded=False):
+        with st.form(f"gen_form_{level}", clear_on_submit=False):
+            scenario = st.text_input("目標情境",
+                                     placeholder="例如：在餐廳點餐並反映送錯餐點")
+            model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"gen_tier_{level}")
+            submitted = st.form_submit_button("生成 ✨")
 
-    if submitted:
-        if not scenario.strip():
-            st.warning("請先輸入情境。")
-        else:
-            with st.spinner("生成中…"):
-                try:
-                    raw = ai.generate_material(scenario.strip(), level, model_label)
-                    mermaid, cards = ai.parse_blocks(raw)
-                    st.session_state.gen_result = {
-                        "scenario": scenario.strip(), "level": level,
-                        "mermaid": mermaid, "flashcards": cards or [], "raw": raw,
-                    }
-                except Exception as e:  # noqa: BLE001
-                    st.session_state.gen_result = None
-                    st.error(f"生成失敗：{e}")
+    gen_scn, tier = None, next(iter(ai.GEN_MODEL_TIERS))
+    if rand:
+        gen_scn = random.choice(_JP_DIALOGUE_TOPICS)
+    elif submitted and scenario.strip():
+        gen_scn, tier = scenario.strip(), model_label
+    elif submitted:
+        st.warning("請先輸入情境。")
+
+    if gen_scn:
+        with st.spinner("生成中…"):
+            try:
+                raw = ai.generate_material(gen_scn, level, tier)
+                mermaid, cards = ai.parse_blocks(raw)
+                st.session_state.gen_result = {
+                    "scenario": gen_scn, "level": level,
+                    "mermaid": mermaid, "flashcards": cards or [], "raw": raw,
+                }
+            except Exception as e:  # noqa: BLE001
+                st.session_state.gen_result = None
+                st.error(_friendly_gen_error(str(e)))
 
     result = st.session_state.get("gen_result")
     if result:
@@ -838,10 +849,38 @@ def page_vocab_bank(level: str) -> None:
         else:
             st.warning("⚠️ 未設 `GITHUB_TOKEN`，生成的字只留在 session，**重整就消失**。"
                        "可手動按下方「⬇️ 下載」保存。")
-        if c3.button("🚀 開始生成", disabled=not api_key, use_container_width=True,
+        if c3.button("🚀 生成這批", disabled=not api_key, use_container_width=True,
                      type="primary"):
             _run_inapp_generation(int(n), tier, auto_push=bool(gh))
             st.rerun()
+
+        # ── 連續生成到目標字數（按一次自動跑多批，撞額度或達標才停）──
+        st.divider()
+        running = st.session_state.get("_autogen_active", False)
+        ac1, ac2 = st.columns([2, 2])
+        target = ac1.number_input("🎯 連續生成到（總庫存字數，無上限）",
+                                  min_value=len(bank) + 1, max_value=1_000_000,
+                                  value=len(bank) + 1000, step=500,
+                                  disabled=running or not api_key)
+        if not running:
+            if ac2.button("🔁 連續生成到目標", disabled=not api_key,
+                          use_container_width=True, type="primary"):
+                st.session_state["_autogen_active"] = True
+                st.session_state["_autogen_target"] = int(target)
+                st.session_state["_autogen_batch"] = int(n)
+                st.session_state["_autogen_tier"] = tier
+                st.session_state["_autogen_level"] = level
+                st.session_state["_autogen_stall"] = 0
+                st.rerun()
+        else:
+            if ac2.button("⏹ 停止連續生成", use_container_width=True):
+                for k in ("_autogen_active", "_autogen_target", "_autogen_batch",
+                          "_autogen_tier", "_autogen_stall"):
+                    st.session_state.pop(k, None)
+                if gh and live_bank:
+                    ok, info = ai.push_bank_to_github({**file_bank, **synced, **live_bank})
+                    _record_push(ok, info, merged={**file_bank, **synced, **live_bank})
+                st.rerun()
 
         try:
             from scripts.generate_vocab import load_wordlist
@@ -850,6 +889,39 @@ def page_vocab_bank(level: str) -> None:
             wl = 0
         st.caption(f"詞表 {wl} 字　·　已完成 **{len(bank)}** 字"
                    f"　·　📁 部署檔 {len(file_bank)} / ☁️ 已推 GitHub {len(synced)} / 🌱 待推 {len(live_bank)}")
+
+        # 連續生成驅動：每次 render 跑一批,未達標就自動 rerun 接著跑
+        if st.session_state.get("_autogen_active"):
+            tgt = st.session_state.get("_autogen_target", 0)
+            batch = st.session_state.get("_autogen_batch", 20)
+            atier = st.session_state.get("_autogen_tier", tier)
+            st.info(f"🔁 連續生成中… 目前 **{len(bank)}** / 目標 **{tgt}** 字。"
+                    "可按「⏹ 停止連續生成」中斷；撞額度會自動停。")
+            if len(bank) >= tgt:
+                st.success(f"🎉 已達標！庫存 {len(bank)} 字。")
+                st.session_state["_autogen_active"] = False
+                if gh and live_bank:
+                    merged = {**file_bank, **synced, **live_bank}
+                    ok, info = ai.push_bank_to_github(merged)
+                    _record_push(ok, info, merged=merged)
+                st.rerun()
+            else:
+                added = _run_inapp_generation(int(batch), atier, auto_push=False)
+                stall = st.session_state.get("_autogen_stall", 0)
+                stall = 0 if added else stall + 1
+                st.session_state["_autogen_stall"] = stall
+                if stall >= 2:
+                    st.session_state["_autogen_active"] = False
+                    if gh and live_bank:
+                        merged = {**file_bank, **synced, **live_bank}
+                        ok, info = ai.push_bank_to_github(merged)
+                        _record_push(ok, info, merged=merged)
+                    st.warning("連續生成已停止：連續多批沒有新增字"
+                               "（詞表已生完或今日額度用罄）。已推回目前進度。")
+                else:
+                    import time as _t
+                    _t.sleep(0.5)
+                    st.rerun()
         last = st.session_state.get("_last_push")
         if last:
             (st.success if last["ok"] else st.error)(
@@ -965,21 +1037,26 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     synced = st.session_state.get("synced_bank", {})
     have = set(file_bank) | set(live) | set(synced)
     todo = [w for w in load_wordlist() if w["word"] not in have][:n]
-    if not todo:
-        st.success("詞表已全數完成，沒有待補單字。可編輯 `scripts/vocab_wordlist.txt` 增字。")
-        return
+    invent_mode = not todo
     todo_set = {w["word"] for w in todo}
     try:
-        with st.spinner(f"用 Gemini（{tier}）生成 {len(todo)} 字…"):
-            entries = ai.generate_vocab_batch(todo, tier)
+        if invent_mode:
+            # 詞表用罄 → AI 自行發想尚未收錄的新字，達成「無上限」持續生成
+            cur_level = st.session_state.get("_autogen_level") or "N3"
+            with st.spinner(f"用 Gemini（{tier}）自動發想 {n} 字…"):
+                entries = ai.invent_vocab_batch(n, cur_level, list(have), tier)
+        else:
+            with st.spinner(f"用 Gemini（{tier}）生成 {len(todo)} 字…"):
+                entries = ai.generate_vocab_batch(todo, tier)
     except Exception as e:  # noqa: BLE001
         st.error(_friendly_gen_error(str(e)))
-        return
+        return 0
 
     added, new_words = 0, []
     for e in entries:
         ww = (e.get("word") or "").strip()
-        if ww in todo_set and ww not in have and e.get("meaning_zh") and e.get("kana"):
+        if ((invent_mode or ww in todo_set) and ww not in have
+                and e.get("meaning_zh") and e.get("kana")):
             live[ww] = e
             have.add(ww)
             new_words.append(ww)
@@ -992,6 +1069,7 @@ def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
         _record_push(ok, info, merged=merged)
         if not ok:
             st.error(f"⚠️ 這批 {added} 字推回失敗，只留在 session，重整就消失！請手動下載 JSON。")
+    return added
 
 
 def _friendly_gen_error(msg: str) -> str:
@@ -1073,7 +1151,6 @@ def page_dashboard(level: str) -> None:
     dist = mastery_distribution()
     total = len(deck)
     mature = dist["young"] + dist["mature"]
-    today = today_str()
     studied = sum(1 for c in deck if c.get("reps", 0) > 0)
     reviews_total = sum(c.get("reps", 0) for c in deck)
 
@@ -1100,6 +1177,15 @@ def page_dashboard(level: str) -> None:
 # ===========================================================================
 # 🗣️ AI 生活對話（Gemini → 雙語對話 + 文法重點）
 # ===========================================================================
+_JP_DIALOGUE_TOPICS = [
+    "コンビニで会計", "レストランで注文", "道を尋ねる", "美容院で予約",
+    "病院で症状を説明", "友達を食事に誘う", "ホテルのチェックイン", "宅配便の受け取り",
+    "駅で切符を買う", "同僚と週末の話", "大家さんに修理をお願い", "服を試着する",
+    "電話で問い合わせ", "カフェで注文", "面接の自己紹介", "近所の人と挨拶",
+    "ジムの入会相談", "落とし物を届ける", "天気の話で雑談", "誕生日を祝う",
+]
+
+
 def page_ai_dialogue(level: str) -> None:
     st.header(f"🗣️ {data.LEVELS[level]['label']} AI 生活對話")
     with st.expander("💡 這是什麼？怎麼用？", expanded=False):
@@ -1115,7 +1201,26 @@ def page_ai_dialogue(level: str) -> None:
         st.warning("尚未設定 Gemini 金鑰，無法「生成」新對話（下方已累積的對話仍可閱讀）。"
                    "請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`。")
     else:
-        with st.form(f"dlg_form_{level}", clear_on_submit=False):
+        # 🎲 隨機生成：自動挑情境，一鍵冒出新對話並累積
+        if st.button("🎲 隨機生成情境對話", type="primary", use_container_width=True,
+                     key=f"dlg_rand_{level}"):
+            used = {d.get("title") for d in
+                    _level_items(ai.load_dialogue_bank(), "_sess_dialogue", level, "id")}
+            pool = [t for t in _JP_DIALOGUE_TOPICS if t not in used] or _JP_DIALOGUE_TOPICS
+            try:
+                with st.spinner("生成中…"):
+                    dlg = ai.gen_dialogue(random.choice(pool), level, model_label)
+                st.session_state[f"dlg_result_{level}"] = dlg
+                try:
+                    _, ok = _persist_dialogue_jp(dlg, level)
+                except Exception:  # noqa: BLE001
+                    ok = False
+                st.session_state["_dlg_saved"] = ok
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(_friendly_gen_error(str(e)))
+        with st.expander("✍️ 想指定情境自己生成？", expanded=False), \
+                st.form(f"dlg_form_{level}", clear_on_submit=False):
             scenario = st.text_input("對話情境",
                                      placeholder="例如：在便利商店結帳並詢問有沒有熱食")
             model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"dlg_tier_{level}")
@@ -1473,24 +1578,83 @@ def page_subtitles(level: str) -> None:
 
 
 def page_vocab_all(level: str) -> None:
-    """單字庫（合併單字卡）：翻面學習核心單字 + AI 生成單字庫，以分頁呈現。"""
+    """單字庫：翻面學習單字卡 + AI 生成單字庫，以分頁呈現。"""
     st.header(f"📖 {data.LEVELS[level]['label']} 單字庫")
     st.caption("「單字卡」翻面學習（正面日文、翻面看中文/詞性/用法/例句，可依詞性分類）；"
                "「AI 單字庫」可無限生成、存進資料庫累積長大。")
-    tab_card, tab_list, tab_ai = st.tabs(
-        ["🃏 單字卡（翻面）", "📗 核心清單", "🤖 AI 單字庫（可生成）"])
+    tab_card, tab_ai = st.tabs(["🃏 單字卡（翻面）", "🤖 AI 單字庫（可生成）"])
     with tab_card:
         page_flashcards(level)
-    with tab_list:
-        page_vocab(level)
     with tab_ai:
         page_vocab_bank(level)
+
+
+PROGRESS_BACKUP_PATH = "progress_backup.json"
+
+
+def _collect_progress() -> dict:
+    """蒐集需備份的使用者進度：已學會、測驗統計、收藏。"""
+    return {
+        "progress": {lv: sorted(s) for lv, s in st.session_state.progress.items()},
+        "quiz": st.session_state.quiz,
+        "favorites": _favorites(),
+    }
+
+
+def _apply_progress(data_in: dict) -> None:
+    """把還原的進度寫回 session 與本機檔（與還原前資料聯集，不覆蓋流失）。"""
+    prog = data_in.get("progress", {})
+    for lv in data.LEVEL_ORDER:
+        st.session_state.progress[lv] |= set(prog.get(lv, []))
+    for lv, st_ in data_in.get("quiz", {}).items():
+        if lv in st.session_state.quiz and isinstance(st_, dict):
+            cur = st.session_state.quiz[lv]
+            # 取較大者，避免還原把本機已累積的次數蓋小
+            cur["correct"] = max(cur["correct"], st_.get("correct", 0))
+            cur["total"] = max(cur["total"], st_.get("total", 0))
+    favs = _favorites()
+    for w, info in data_in.get("favorites", {}).items():
+        favs.setdefault(w, info)
+    save_progress()
+    save_data()
+
+
+def _render_progress_backup() -> None:
+    """跨部署永久化：把學習進度手動備份到 GitHub，或從 GitHub 還原。"""
+    with st.expander("☁️ 學習進度跨部署備份／還原（重新部署後用）", expanded=False):
+        st.caption("進度（已學會／測驗／收藏）平時存在本機，Cloud 重新部署會重置。"
+                   f"這裡可手動推到 GitHub `{PROGRESS_BACKUP_PATH}` 永久保存，"
+                   "換機或重部署後一鍵還原（還原採聯集，不會蓋掉現有進度）。")
+        if not ai.get_github_token():
+            st.warning("需設定 `GITHUB_TOKEN`（Streamlit Secrets）才能備份／還原。")
+            return
+        c1, c2 = st.columns(2)
+        if c1.button("☁️ 備份進度到 GitHub", use_container_width=True):
+            payload = json.dumps(_collect_progress(), ensure_ascii=False, indent=2) + "\n"
+            ok, info = ai.github_put_file(
+                PROGRESS_BACKUP_PATH, payload, "progress backup")
+            if ok:
+                st.success("✅ 已備份到 GitHub。")
+            else:
+                st.error(f"備份失敗：{info}")
+        if c2.button("⬇️ 從 GitHub 還原", use_container_width=True):
+            ok, data_in = ai.github_get_file(PROGRESS_BACKUP_PATH)
+            if ok and isinstance(data_in, dict):
+                _apply_progress(data_in)
+                st.success("✅ 已還原並合併進度。")
+                st.rerun()
+            elif isinstance(data_in, dict) and data_in.get("code") == 404:
+                st.info("GitHub 上還沒有備份檔，請先按「備份」。")
+            else:
+                st.error(f"還原失敗：{data_in}")
 
 
 def page_library(level: str) -> None:
     """📚 我的資料庫：所有 AI 生成並累積的內容（單字/文法/對話/閱讀）集中瀏覽。"""
     st.header("📚 我的資料庫")
     st.caption("所有 AI 生成、累積的內容都在這裡瀏覽——這些都會推到 GitHub 永久保存、持續長大。")
+
+    _render_progress_backup()
 
     vocab = {**ai.load_vocab_bank(),
              **st.session_state.get("synced_bank", {}),
@@ -1499,13 +1663,30 @@ def page_library(level: str) -> None:
     dialogue = _level_items(ai.load_dialogue_bank(), "_sess_dialogue", None, "id")
     reading = _level_items(ai.load_readings_bank(), "_sess_readings", None, "id")
 
-    m1, m2, m3, m4 = st.columns(4)
+    favs = _favorites()
+    m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("📗 單字", len(vocab))
     m2.metric("📐 文法", len(grammar))
     m3.metric("🗣️ 對話", len(dialogue))
     m4.metric("📚 閱讀／字幕", len(reading))
+    m5.metric("⭐ 我的最愛", len(favs))
 
-    t_v, t_g, t_d, t_r = st.tabs(["📗 單字", "📐 文法", "🗣️ 對話", "📚 閱讀／字幕"])
+    t_fav, t_v, t_g, t_d, t_r = st.tabs(
+        ["⭐ 我的最愛", "📗 單字", "📐 文法", "🗣️ 對話", "📚 閱讀／字幕"])
+    with t_fav:
+        if not favs:
+            st.info("還沒有收藏。到「📖 單字庫 → 🃏 單字卡」按「☆ 收藏」加入最愛。")
+        else:
+            st.caption(f"共收藏 {len(favs)} 個單字（跨級別，永久保存）")
+            for w in sorted(favs):
+                e = favs[w]
+                c1, c2 = st.columns([6, 1])
+                lv = f"[{e['level']}] " if e.get("level") else ""
+                c1.markdown(f"{lv}**{w}**　{e.get('kana', '')}　— {e.get('meaning_zh', '')}")
+                if c2.button("🗑️ 移除", key=f"unfav_{w}"):
+                    toggle_favorite(w, e)
+                    st.rerun()
+
     with t_v:
         if not vocab:
             st.info("還沒有 AI 單字。到「📖 單字庫 → 🤖 AI 單字庫」按生成。")
@@ -1613,16 +1794,21 @@ def _quiz_question(level: str, mode: str):
     target = random.choice(vocab)
     others = [w for w in vocab if w["kanji"] != target["kanji"]]
     sample = random.sample(others, k=min(3, len(others)))
+    audio = ""
     if mode == "中文→選假名":
         options = [target["kana"]] + [w["kana"] for w in sample]
         prompt, answer, hint = target["chinese"], target["kana"], "選出正確的假名唸法"
+    elif mode == "🔊 聽發音→選假名":
+        options = [target["kana"]] + [w["kana"] for w in sample]
+        prompt, answer, hint = "", target["kana"], "聽發音，選出正確的假名"
+        audio = target["kana"]
     else:  # 日文→選中文
         options = [target["chinese"]] + [w["chinese"] for w in sample]
         prompt = f"{target['kanji']}（{target['kana']}）"
         answer, hint = target["chinese"], "選出正確的中文意思"
     random.shuffle(options)
     return {"prompt": prompt, "answer": answer, "options": options,
-            "hint": hint, "nonce": random.randint(0, 10**9)}
+            "hint": hint, "audio": audio, "nonce": random.randint(0, 10**9)}
 
 
 def page_quiz(level: str) -> None:
@@ -1630,7 +1816,8 @@ def page_quiz(level: str) -> None:
     st.header(f"📝 {data.LEVELS[level]['label']} 測驗練習")
     st.caption("主動回憶練習：先想答案再作答。三種題型可切換，分數即時記錄。")
 
-    mode = st.radio("題型", ["中文→選假名", "日文→選中文", "文法：意義→選文型"],
+    mode = st.radio("題型",
+                    ["中文→選假名", "日文→選中文", "🔊 聽發音→選假名", "文法：意義→選文型"],
                     horizontal=True, key=f"quizmode_{level}")
     qkey = f"quizq_{level}_{mode}"
     if not st.session_state.get(qkey):
@@ -1641,7 +1828,10 @@ def page_quiz(level: str) -> None:
         return
 
     st.markdown(f"**{q['hint']}**")
-    st.markdown(f"## {q['prompt']}")
+    if q.get("audio"):
+        play_button(q["audio"], key=f"quizaudio_{level}_{q['nonce']}", label="🔊 播放發音")
+    elif q.get("prompt"):
+        st.markdown(f"## {q['prompt']}")
     choice = st.radio("選擇答案：", q["options"], index=None,
                       key=f"quizchoice_{level}_{q['nonce']}")
     c1, c2 = st.columns(2)
@@ -1653,6 +1843,7 @@ def page_quiz(level: str) -> None:
             st.success("正解！🎉")
         else:
             st.error(f"再加油！正確答案是：{q['answer']}")
+        save_progress()
     if c2.button("下一題 ➡️", key=f"quiznext_{level}_{q['nonce']}"):
         st.session_state[qkey] = _quiz_question(level, mode)
         st.rerun()

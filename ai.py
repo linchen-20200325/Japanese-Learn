@@ -74,28 +74,32 @@ GEN_SYSTEM_PROMPT = """# 角色
 - **節點文字內絕對不可出現 `(` `)` `[` `]` `{` `}` 半形括號**（會被 mermaid 當形狀語法）。
   要表達括號請用全形 `（）` 或 `「」`
 - 用 `-->` 連線
-- 雙語用「日文 | 中文」分隔，例如 `n0_0["はじめまして | 初次見面"]`
+- **每個含漢字的節點都必須標注 50 音假名讀音**：在日文後面用全形括號 `（）` 緊接整句平假名讀音，再接中文。
+  格式：`日文（假名讀音） | 中文`（半形括號嚴禁，務必用全形）
+- 子節點雙語範例：`n1_0["注文する（ちゅうもんする） | 點餐"]`
+- 分支節點（標題）同樣標假名：`日文（假名） 中文`，例如 `n1["注文（ちゅうもん） 點餐"]`
+- 純假名（無漢字）的詞可不必再標假名
 
 **結構**：
 - root 節點：`root(("情境名稱中文"))`（雙重圓括號是唯一允許的括號）
-- 主分支 3-5 個，代表對話階段（開場、核心、收尾等），日文 ≤ 6 字 + 中文標籤
-- 每分支底下 2-4 個子節點，日文短句 + 中文翻譯，用 `|` 分隔
+- 主分支 3-5 個，代表對話階段（開場、核心、收尾等），日文（假名）≤ 6 字 + 中文標籤
+- 每分支底下 2-4 個子節點，日文短句（整句假名） + 中文翻譯，用 `|` 分隔
 
 **完整範例（請仿照產出，結構與標點都照抄）**：
 ```
 flowchart LR
     root(("カフェで注文"))
-    n0["挨拶 開場"]
-    n1["注文 點餐"]
-    n2["会計 結帳"]
+    n0["挨拶（あいさつ） 開場"]
+    n1["注文（ちゅうもん） 點餐"]
+    n2["会計（かいけい） 結帳"]
     root --> n0
     root --> n1
     root --> n2
     n0_0["いらっしゃいませ | 歡迎光臨"]
     n0 --> n0_0
-    n1_0["ホットコーヒーをください | 請給我熱咖啡"]
+    n1_0["ホットコーヒーをください（ほっとこーひーをください） | 請給我熱咖啡"]
     n1 --> n1_0
-    n2_0["カードで払えますか | 可以刷卡嗎"]
+    n2_0["カードで払えますか（かーどではらえますか） | 可以刷卡嗎"]
     n2 --> n2_0
 ```
 
@@ -706,6 +710,38 @@ def github_put_file(path: str, payload_json: str, commit_msg: str) -> tuple:
         return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
 
 
+def github_get_file(path: str):
+    """從 GitHub repo 讀回某檔的 JSON 內容。回傳 (ok, data_or_info)。
+
+    與 github_put_file 配對，用於跨部署還原（例如學習進度備份）。
+    檔案不存在（404）時回傳 (False, {code:404})，呼叫端可視為「尚無備份」。
+    """
+    import base64
+    import urllib.error
+    import urllib.request
+
+    token = get_github_token()
+    if not token:
+        return False, {"stage": "token", "msg": "未設定 GITHUB_TOKEN"}
+    repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
+    branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
+    api = f"https://api.github.com/repos/{repo}/contents/{path}?ref={branch}"
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/vnd.github+json",
+               "User-Agent": "japanese-learn-cloud",
+               "X-GitHub-Api-Version": "2022-11-28"}
+    try:
+        req = urllib.request.Request(api, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            current = json.loads(r.read())
+        raw = base64.b64decode(current.get("content", "")).decode("utf-8")
+        return True, json.loads(raw)
+    except urllib.error.HTTPError as e:
+        return False, {"stage": "GET", "code": e.code}
+    except Exception as e:  # noqa: BLE001
+        return False, {"stage": "GET", "code": 0, "body": f"{type(e).__name__}: {e}"}
+
+
 def generate_vocab_batch(words: list, tier: str) -> list:
     """呼叫 Gemini 一次生成一批日文單字的 JSON 資料。words 為 [(word, level), ...] 或 [word]。"""
     items = []
@@ -719,6 +755,16 @@ def generate_vocab_batch(words: list, tier: str) -> list:
     text = _llm_generate(VOCAB_SYSTEM_PROMPT,
                          "請為以下日文單字生成資料：" + "、".join(items),
                          tier, max_tokens=8000)
+    return extract_json_array(text)
+
+
+def invent_vocab_batch(n: int, level: str, avoid: list, tier: str) -> list:
+    """詞表用罄時：請 AI 自行挑選尚未收錄的實用日文單字，達成「無上限」持續生成。"""
+    avoid_str = "、".join(list(avoid)[-120:])
+    user = (f"請自行挑選 {n} 個實用、常見、值得學的{level}程度日文單字"
+            f"（漢字或假名 headword；避免重複、避免冷僻字），並依系統格式輸出。"
+            f"已收錄（請避免）：{avoid_str}")
+    text = _llm_generate(VOCAB_SYSTEM_PROMPT, user, tier, max_tokens=8000)
     return extract_json_array(text)
 
 
