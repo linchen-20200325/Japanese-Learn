@@ -1177,8 +1177,12 @@ def _do_generate_reading(topic: str, level: str, model_label: str) -> None:
     """生成一篇閱讀 → 存進永久庫 → 設為當前顯示結果。"""
     with st.spinner(f"生成「{topic}」中…"):
         rd = ai.gen_reading(topic, level, model_label)
-    ok, info = _persist_reading_jp(rd, level)
+    # 先設為顯示結果，確保一定看得到；存檔/推回出錯也不影響「已生成」
     st.session_state[f"rd_result_{level}"] = rd
+    try:
+        ok, _info = _persist_reading_jp(rd, level)
+    except Exception:  # noqa: BLE001
+        ok = False
     st.session_state["_rd_saved"] = ok
 
 
@@ -1327,8 +1331,11 @@ def page_subtitles(level: str) -> None:
             try:
                 with st.spinner("AI 逐句翻譯 + 教學中…"):
                     lesson = ai.gen_subtitle_lesson(raw, level, tier)
-                ok, _info = _persist_reading_jp(lesson, level)
-                st.session_state[f"sub_result_{level}"] = lesson
+                st.session_state[f"sub_result_{level}"] = lesson  # 先存，確保看得到
+                try:
+                    ok, _info = _persist_reading_jp(lesson, level)
+                except Exception:  # noqa: BLE001
+                    ok = False
                 st.session_state["_sub_saved"] = ok
                 st.rerun()
             except Exception as e:  # noqa: BLE001
