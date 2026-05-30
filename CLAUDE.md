@@ -1,49 +1,24 @@
-# CLAUDE.md — JLPT 日文學習 App 核心開發協議 (Core Protocol v2.0)
+# 核心開發與治理協議 (Core Protocol v2.0)
 
-> 本文件為本專案在 Claude Code 對話中的**最高行為準則**。
-> 任何開發、修改、推送動作皆須遵循以下規範。
+## §1 狀態與記憶管理 (State & Memory)
+- **冷熱資料分離**：專案根目錄必須維持極簡 `STATE.md`。每次任務**僅限讀取此檔與目錄結構**來理解專案目標，嚴禁要求使用者重複解釋。
+- **防幻覺機制**：對話超過 10 輪時，修改程式碼前**必須重新讀取目標檔**（不准信任記憶）。
+- **主動壓縮**：階段任務完成時，主動提醒我執行 `/compact` 指令，保留核心決策並清理無用推理鏈。
 
----
+## §2 精準讀寫與檢索 (Precision I/O)
+- **大檔案防截斷**：讀取超過 500 行的檔案，強制使用 `offset` 與 `limit` 分段讀取；搜尋結果超過 2000 bytes 時，必須用 `grep` 進行二次精確驗證。
+- **動工前大掃除**：重構前優先清理 Dead code 與 Unused imports，極大化釋放 Token 空間。
+- **局部編輯**：閉嘴寫扣 (No-Yapping)。嚴禁整檔覆蓋，僅針對特定函數或行數進行精準替換。
 
-## 1. 專案宗旨
-打造一個支援 **JLPT N1 ~ N5 全階段**的 Streamlit 日文學習 App，
-強調資料分離、介面乾淨、各級別進度獨立、語音記憶體級播放。
+## §3 規劃與多線程 (Plan & Parallel Execute)
+- **嚴格三步法**：Explore Agent（唯讀探索環境） -> 提出 Plan（3 句話藍圖）與我確認 -> 獲准後才 Execute（動手改 code）。
+- **並行處理**：若任務牽涉超過 5 個檔案，主動拆分成子任務並行處理，極致利用 API Context Cache 共享快取。
 
-## 2. 技術棧
-- **語言**：Python 3.11+
-- **框架**：Streamlit（`st.session_state` 管理狀態）
-- **語音**：gTTS（**記憶體級 BytesIO**，禁止落地暫存檔，避免 File Lock）
-- **資料**：以 `data.py` 模擬 JSON 載入；未來可無痛換成 `json.load(...)`
+## §4 鋼鐵自省與交付 (Audit & Delivery)
+- **強制驗證機制**：不准說 Done 就跑。修改後必須通過 Type check 與 Lint。完成後輸出簡短報告：[邏輯]、[邊界]、[效能]、[Debug]。
+- **環境與效能**：限用 `.py` 腳本（禁 `.ipynb`），維護 `requirements.txt`。必須確保 `st.cache_data` 的正確使用以優化 Streamlit 效能。
+- **PR 規範**：使用 `gh pr create` 建立請求，並隨附一鍵 Merge 指令：`gh pr merge <PR號碼> --merge --delete-branch`。嚴禁自動 Merge。
 
-## 3. 架構規範
-- **資料與 UI 分離**：所有 N1~N5 的單字／文法／短文／文章／50音資料一律放在
-  `db/` 目錄下的 JSON 資料庫（`db/N1.json`～`db/N5.json`、`db/gojuon.json`），
-  `data.py` 為資料存取層，`app.py` 僅負責呈現與互動，禁止把資料硬塞進 UI 層。
-- **單字資料欄位**（缺一不可）：
-  `level`、`kanji`、`kana`、`romaji`、`chinese`、`grammar`、`usage`、`examples`。
-  其中 `examples` 為例句清單，每句含 `jp`（日文）、`kana`（唸法）、`zh`（中文）。
-- **存取介面**：一律透過 `load_vocab / load_grammar / load_passages / load_gojuon`，
-  禁止外部直接讀取資料層的私有快取函式（`_load_json` / `_load_level`）。
-
-## 4. UI / UX 規範
-- **Sidebar 兩層導覽**：
-  1. 第一層：級別下拉（N5 基礎 → N1 進階最高峰）。
-  2. 第二層：功能切換（50音／核心單字庫／文法解說核心／情境短文與進級）。
-- 切換級別時，主頁面內容必須**動態切換**為該級別。
-- **50音 為基礎功能，僅在 N5 顯示**，N4~N1 一律隱藏，保持介面乾淨。
-
-## 5. 狀態管理規範
-- 各級別進度**獨立**，以 `st.session_state.progress[level]` 與
-  `st.session_state.quiz[level]` 分開記錄，**嚴禁互相覆蓋**。
-- 任何新功能若需暫存狀態，皆須以「級別」為命名空間。
-
-## 6. Git 工作流程
-- **開發分支**：`claude/jlpt-streamlit-n1-n5-Za8UK`（未經授權禁止推往其他分支）。
-- commit 訊息使用繁體中文，清楚描述變更內容。
-- **禁止**提交 `__pycache__`、`.pyc`、虛擬環境等衍生檔（已由 `.gitignore` 控管）。
-- **未經使用者明確指示，禁止建立 PR**。
-
-## 7. 安全與唯讀守則
-- 收到「上下文重建 / 唯讀」類指令時，先檢查實際檔案狀態，
-  **誠實回報**，不得假裝載入不存在的檔案或進度。
-- 破壞性或對外動作（刪除、覆寫、推送、PR）前需確認授權。
+## §5 卡關救援 (Anti-Loop Protocol)
+- 針對同一個報錯，若連續重試 2 次未果，**立即停機**。
+- 啟動除錯協議，並交由我詢問其他 AI 進行雙重驗證。
