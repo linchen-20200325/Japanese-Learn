@@ -17,6 +17,8 @@ import re
 import streamlit as st
 
 VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "vocab_bank.json")
+GRAMMAR_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_bank.json")
+PASSAGE_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "passage_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -208,6 +210,34 @@ DIALOGUE_GEN_PROMPT = """你是日文會話教材編輯。使用者給「情境 
 """
 
 
+GRAMMAR_GEN_PROMPT = """你是 JLPT 日文文法教學專家。使用者給「JLPT 級別（可附主題或指定文型）」，你產出該級別的核心文法解說。
+
+# 嚴格輸出 JSON array（只輸出 JSON，前後不得有任何文字、不得包 markdown code fence）
+[
+  {
+    "point": "文法句型（例如「〜たことがあります」）",
+    "meaning": "繁中一句話說明此文型的意思",
+    "usage": "繁中用法說明：接續方式、語感、常見場合、否定/過去等變化",
+    "jlpt": "N5 / N4 / N3 / N2 / N1 擇一（須等於指定級別）",
+    "examples": [
+      {"jp": "日文例句（含漢字，≤ 25 字）", "kana": "整句假名讀音", "zh": "繁中翻譯"}
+    ]
+  }
+]
+
+# 數量規範
+- array 含 3-5 個文法句型，皆須符合指定 JLPT 級別、且不可是過於基礎的重複。
+- 每個句型 examples 含 2 句，自然口語、貼合該文型。
+
+# 級別差異
+- N5: は/が/を/へ、です・ます、〜たい、〜があります
+- N4: て形、〜たことがある、〜なければならない、授受動詞
+- N3: 〜によって、〜わけだ、〜に基づいて、被動使役
+- N2: 〜にもかかわらず、〜つつある、〜を通じて、接續詞
+- N1: 〜を余儀なくされる、〜にとどまらず、〜をもって、慣用句
+"""
+
+
 # ===========================================================================
 # Secret / key 讀取與清潔
 # ===========================================================================
@@ -395,6 +425,24 @@ def gen_dialogue(scenario: str, level: str, tier: str) -> dict:
     return json.loads(m.group(0))
 
 
+def gen_grammar(level: str, tier: str, topic: str = "") -> list:
+    """呼叫 Gemini 產出一批該級別的文法解說（list of dict）。"""
+    user = f"級別：{level}"
+    if topic.strip():
+        user += f"\n主題／想學的文型：{topic.strip()}"
+    text = _llm_generate(GRAMMAR_GEN_PROMPT, user, tier, max_tokens=6000)
+    items = extract_json_array(text)
+    # 補上 jlpt，並過濾不完整項
+    out = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("point") or not it.get("meaning"):
+            continue
+        it.setdefault("jlpt", level)
+        it.setdefault("examples", [])
+        out.append(it)
+    return out
+
+
 # ===========================================================================
 # 解析 mermaid / flashcards
 # ===========================================================================
@@ -517,8 +565,12 @@ def _repo_default_branch(repo: str, token: str) -> str:
         return "main"
 
 
-def push_bank_to_github(merged: dict, silent: bool = False):
-    """把合併後的 vocab_bank 透過 GitHub Contents API 推回 repo。回傳 (ok, info)。"""
+def push_json_to_github(payload, repo_path: str, commit_msg: str):
+    """把任一 JSON 物件透過 GitHub Contents API 推回 repo 指定路徑。回傳 (ok, info)。
+
+    通用版：vocab_bank / grammar_bank / passage_bank 皆共用同一套分支偵測與
+    首次建檔（404/422）處理邏輯。
+    """
     import base64
     import urllib.error
     import urllib.request
@@ -530,10 +582,9 @@ def push_bank_to_github(merged: dict, silent: bool = False):
     repo = _read_secret("GITHUB_REPO") or DEFAULT_REPO
     # 分支：優先用 GITHUB_BRANCH secret；未設則自動偵測 repo 預設分支（本 repo 無 main）
     branch = _read_secret("GITHUB_BRANCH") or _repo_default_branch(repo, token)
-    path = "vocab_bank.json"
-    payload_json = json.dumps(merged, ensure_ascii=False, indent=2) + "\n"
+    payload_json = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
 
-    api = f"https://api.github.com/repos/{repo}/contents/{path}"
+    api = f"https://api.github.com/repos/{repo}/contents/{repo_path}"
     headers = {"Authorization": f"Bearer {token}",
                "Accept": "application/vnd.github+json",
                "User-Agent": "japanese-learn-cloud",
@@ -557,7 +608,7 @@ def push_bank_to_github(merged: dict, silent: bool = False):
 
     try:
         put_payload = {
-            "message": f"vocab_bank: cloud append（共 {len(merged)} 字）",
+            "message": commit_msg,
             "content": base64.b64encode(payload_json.encode("utf-8")).decode("ascii"),
             "branch": branch,
         }
@@ -576,3 +627,42 @@ def push_bank_to_github(merged: dict, silent: bool = False):
                        "repo": repo, "branch": branch}
     except Exception as e:  # noqa: BLE001
         return False, {"stage": "PUT", "code": 0, "body": f"{type(e).__name__}: {e}"}
+
+
+def push_bank_to_github(merged: dict, silent: bool = False):
+    """把合併後的 vocab_bank 推回 repo（相容舊介面）。"""
+    return push_json_to_github(
+        merged, "vocab_bank.json", f"vocab_bank: cloud append（共 {len(merged)} 字）")
+
+
+# ---------------------------------------------------------------------------
+# grammar_bank / passage_bank：AI 生成的文法與範例短文，可累加並推回 repo
+# ---------------------------------------------------------------------------
+def _load_list_bank(path: str) -> list:
+    """讀取一個「list of dict」型 bank 檔；失敗回空清單。"""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def load_grammar_bank() -> list:
+    """讀取 grammar_bank.json（AI 生成文法，list of dict）。"""
+    return _load_list_bank(GRAMMAR_BANK_FILE)
+
+
+def load_passage_bank() -> list:
+    """讀取 passage_bank.json（AI 生成範例短文，list of dict）。"""
+    return _load_list_bank(PASSAGE_BANK_FILE)
+
+
+def push_grammar_bank(items: list):
+    return push_json_to_github(
+        items, "grammar_bank.json", f"grammar_bank: cloud append（共 {len(items)} 條）")
+
+
+def push_passage_bank(items: list):
+    return push_json_to_github(
+        items, "passage_bank.json", f"passage_bank: cloud append（共 {len(items)} 篇）")

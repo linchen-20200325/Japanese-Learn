@@ -173,84 +173,202 @@ def page_gojuon(level: str) -> None:
                         play_button(item["kana"], key=f"goj_{key}_{i + j}_{item['romaji']}")
 
 
-def page_vocab(level: str) -> None:
-    """核心單字庫（依級別動態切換）。"""
-    st.header(f"📚 {data.LEVELS[level]['label']} 核心單字庫")
-    st.caption("點開「顯示中文與唸法」即可看到中文翻譯、假名唸法、使用方式與例句。")
-
-    vocab = data.load_vocab(level)
-    if not vocab:
-        st.info("此級別尚無單字資料。")
-        return
-
-    learned = st.session_state.progress[level]
-    st.progress(
-        learned_count(level) / len(vocab) if vocab else 0,
-        text=f"本級別已學會 {learned_count(level)} / {len(vocab)} 個單字",
-    )
-
-    for idx, word in enumerate(vocab):
-        done = word["kanji"] in learned
-        with st.container(border=True):
-            head, btn = st.columns([4, 1])
-            with head:
-                # 預設只顯示漢字（與詞性），中文與唸法需「選到才跑出來」
-                st.subheader(f"{word['kanji']}　{'✅' if done else ''}")
-                if word.get("pos"):
-                    st.caption(f"詞性：{word['pos']}")
-            with btn:
-                play_button(word["kanji"], key=f"vocab_play_{level}_{idx}")
-                if st.button(
-                    "已學會" if not done else "↩️ 取消",
-                    key=f"learn_{level}_{idx}",
-                ):
-                    if done:
-                        learned.discard(word["kanji"])
-                    else:
-                        mark_learned(level, word["kanji"])
-                    st.rerun()
-
-            with st.expander("👀 顯示中文與唸法"):
-                st.markdown(
-                    f"**唸法（假名）：** {word['kana']}　|　"
-                    f"**羅馬拼音：** {word['romaji']}"
-                )
-                st.markdown(f"**中文：** {word['chinese']}")
-                if word.get("grammar"):
-                    st.info(f"📝 核心文法：{word['grammar']}")
-                if word.get("usage"):
-                    st.success(f"💡 怎麼用：{word['usage']}")
-                render_examples(word.get("examples", []), key_prefix=f"vocab_{level}_{idx}")
+def _grammar_for_level(level: str) -> list:
+    """合併核心文法 + grammar_bank（檔案）+ session 新生成，依 point 去重。"""
+    out, seen = [], set()
+    for g in data.load_grammar(level):
+        if g["point"] not in seen:
+            out.append(g)
+            seen.add(g["point"])
+    for g in ai.load_grammar_bank() + st.session_state.get("live_grammar", []):
+        if g.get("jlpt") == level and g.get("point") and g["point"] not in seen:
+            out.append(g)
+            seen.add(g["point"])
+    return out
 
 
-def page_grammar(level: str) -> None:
-    """文法解說核心（依級別動態切換）。"""
-    st.header(f"📖 {data.LEVELS[level]['label']} 文法解說核心")
-    st.caption("每個文法皆含意義、用法說明與多組例句（可顯示唸法與中文）。")
-
-    grammar = data.load_grammar(level)
+def _render_grammar_list(grammar: list, level: str, key_tag: str) -> None:
+    """渲染文法清單（expander 內含意義、用法、例句）。"""
     if not grammar:
         st.info("此級別尚無文法資料。")
         return
-
     for idx, g in enumerate(grammar):
-        with st.expander(f"{g['point']}　—　{g['meaning']}", expanded=(idx == 0)):
+        src = "🤖 " if g.get("src") == "ai" else ""
+        with st.expander(f"{src}{g['point']}　—　{g['meaning']}", expanded=(idx == 0)):
             st.markdown(f"**意義：** {g['meaning']}")
             if g.get("usage"):
                 st.success(f"💡 用法：{g['usage']}")
-            render_examples(g.get("examples", []), key_prefix=f"gram_{level}_{idx}")
+            render_examples(g.get("examples", []), key_prefix=f"{key_tag}_{level}_{idx}")
+
+
+def page_grammar(level: str) -> None:
+    """文法解說核心：核心解說 + AI 生成（累加）+ 文法庫查看。"""
+    st.header(f"📖 {data.LEVELS[level]['label']} 文法解說核心")
+    st.caption("每個文法皆含意義、用法說明與多組例句（可顯示唸法與中文）。")
+
+    tab_core, tab_ai, tab_bank = st.tabs(
+        ["📘 核心解說", "🤖 AI 生成（累加）", "🗂️ 文法庫查看"])
+
+    with tab_core:
+        _render_grammar_list(data.load_grammar(level), level, "gram_core")
+
+    with tab_ai:
+        _page_grammar_ai(level)
+
+    with tab_bank:
+        _page_grammar_bank(level)
+
+
+def _page_grammar_ai(level: str) -> None:
+    """用 Gemini 依級別生成文法，累加進 grammar_bank（可推回 GitHub）。"""
+    st.caption("輸入想學的文型或主題（可留空），AI 依目前級別生成 3–5 條文法，"
+               "累加到「文法庫」。設定 GITHUB_TOKEN 後可自動推回永久保存。")
+    if not ai.get_api_key():
+        st.warning("尚未設定 Gemini API 金鑰，無法生成。請至 Cloud Secrets 加入 `GEMINI_API_KEY`。")
+        return
+
+    with st.form(f"gram_ai_form_{level}", clear_on_submit=False):
+        topic = st.text_input("想學的文型／主題（可留空）",
+                              placeholder="例如：表示推測的句型 / 〜ばかり")
+        tier = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"gram_tier_{level}")
+        submitted = st.form_submit_button("生成 ✨", type="primary")
+
+    if submitted:
+        with st.spinner("生成中…"):
+            try:
+                items = ai.gen_grammar(level, tier, topic)
+            except Exception as e:  # noqa: BLE001
+                st.error(_friendly_gen_error(str(e)))
+                items = []
+        if items:
+            added = _append_live_grammar(items, level)
+            st.success(f"✅ 已生成並累加 {added} 條文法。"
+                       + ("" if added else "（這些文型已存在文法庫中）"))
+            gh = ai.get_github_token()
+            if gh and added:
+                file_bank = ai.load_grammar_bank()
+                merged = file_bank + st.session_state.get("live_grammar", [])
+                ok, info = ai.push_grammar_bank(merged)
+                _record_list_push("grammar", ok, info,
+                                  merged=merged, file_path=ai.GRAMMAR_BANK_FILE)
+            st.rerun()
+
+    live = st.session_state.get("live_grammar", [])
+    if live:
+        st.warning(f"🌱 session 新增 {len(live)} 條尚未進 repo。設定 GITHUB_TOKEN 可自動推回，"
+                   "或在「文法庫查看」分頁手動推回／下載。")
+
+
+def _page_grammar_bank(level: str) -> None:
+    """檢視累加的文法庫（核心 + AI），並提供推回／下載。"""
+    grammar = _grammar_for_level(level)
+    file_bank = ai.load_grammar_bank()
+    live = st.session_state.get("live_grammar", [])
+    st.caption(f"本級別共 {len(grammar)} 條　·　📁 repo 已存 {len(file_bank)} 條 "
+               f"/ 🌱 session 新增 {len(live)} 條")
+
+    if file_bank or live:
+        merged = file_bank + live
+        c1, c2 = st.columns([3, 2])
+        c1.download_button("⬇️ 下載 grammar_bank.json",
+                           data=json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+                           file_name="grammar_bank.json", mime="application/json",
+                           use_container_width=True)
+        if c2.button("🚀 立即推回 GitHub", disabled=not ai.get_github_token() or not live,
+                     use_container_width=True, key=f"gram_push_{level}"):
+            ok, info = ai.push_grammar_bank(merged)
+            _record_list_push("grammar", ok, info,
+                              merged=merged, file_path=ai.GRAMMAR_BANK_FILE)
+            st.rerun()
+        _render_push_error("grammar")
+
+    # 標上來源後渲染：核心文法以外（來自 AI bank/session）標 🤖
+    core_points = {g["point"] for g in data.load_grammar(level)}
+    tagged = [{**g, "src": None if g["point"] in core_points else "ai"} for g in grammar]
+    _render_grammar_list(tagged, level, "gram_bank")
+
+
+def _passages_for_level(level: str) -> list:
+    """合併核心短文 + passage_bank（檔案）+ session 新生成，依 title 去重。"""
+    out, seen = [], set()
+    for p in data.load_passages(level):
+        if p.get("title") and p["title"] not in seen:
+            out.append(p)
+            seen.add(p["title"])
+    for p in ai.load_passage_bank() + st.session_state.get("live_passages", []):
+        if p.get("jlpt") == level and p.get("title") and p["title"] not in seen:
+            out.append({**p, "src": "ai"})
+            seen.add(p["title"])
+    return out
+
+
+def _page_passage_ai_gen(level: str) -> None:
+    """在範例短文頁內，用 AI 生成新範例短文並累加（可推回 GitHub）。"""
+    with st.expander("🤖 用 AI 生成新的範例短文（累加）", expanded=False):
+        if not ai.get_api_key():
+            st.warning("尚未設定 Gemini API 金鑰，無法生成。")
+            return
+        with st.form(f"pass_ai_form_{level}", clear_on_submit=False):
+            topic = st.text_input("主題", placeholder="例如：在餐廳點餐 / 我的暑假 / 看醫生")
+            tier = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"pass_tier_{level}")
+            submitted = st.form_submit_button("生成 ✨", type="primary")
+        if submitted and topic.strip():
+            with st.spinner("生成中…"):
+                try:
+                    rd = ai.gen_reading(topic.strip(), level, tier)
+                except Exception as e:  # noqa: BLE001
+                    st.error(_friendly_gen_error(str(e)))
+                    rd = None
+            if rd and rd.get("sentences"):
+                passage = {
+                    "title": rd.get("title_zh") or rd.get("title") or topic.strip(),
+                    "type": "AI 短文",
+                    "sentences": [{"jp": s.get("jp", ""), "kana": s.get("kana", ""),
+                                   "zh": s.get("zh", "")} for s in rd["sentences"]],
+                }
+                if _append_live_passage(passage, level):
+                    st.success("✅ 已生成並累加 1 篇範例短文。")
+                    gh = ai.get_github_token()
+                    if gh:
+                        merged = ai.load_passage_bank() + st.session_state.get("live_passages", [])
+                        ok, info = ai.push_passage_bank(merged)
+                        _record_list_push("passage", ok, info,
+                                          merged=merged, file_path=ai.PASSAGE_BANK_FILE)
+                    st.rerun()
+                else:
+                    st.info("這個標題的短文已存在。")
+        elif submitted:
+            st.warning("請先輸入主題。")
+        live = st.session_state.get("live_passages", [])
+        if live or ai.load_passage_bank():
+            merged = ai.load_passage_bank() + live
+            c1, c2 = st.columns([3, 2])
+            c1.download_button("⬇️ 下載 passage_bank.json",
+                               data=json.dumps(merged, ensure_ascii=False, indent=2) + "\n",
+                               file_name="passage_bank.json", mime="application/json",
+                               use_container_width=True)
+            if c2.button("🚀 立即推回 GitHub", disabled=not ai.get_github_token() or not live,
+                         use_container_width=True, key=f"pass_push_{level}"):
+                ok, info = ai.push_passage_bank(merged)
+                _record_list_push("passage", ok, info,
+                                  merged=merged, file_path=ai.PASSAGE_BANK_FILE)
+                st.rerun()
+            _render_push_error("passage")
 
 
 def page_passage(level: str) -> None:
-    """情境短文與進級（多篇短文／文章 + 小測驗，依級別動態切換）。"""
+    """情境短文與進級（核心 + AI 累加範例 + 小測驗，依級別動態切換）。"""
     st.header(f"📝 {data.LEVELS[level]['label']} 情境短文與進級")
 
-    passages = data.load_passages(level)
+    _page_passage_ai_gen(level)
+
+    passages = _passages_for_level(level)
     if not passages:
-        st.info("此級別尚無短文資料。")
+        st.info("此級別尚無短文資料。可用上方「AI 生成新的範例短文」建立。")
         return
 
-    titles = [f"{p.get('type', '短文')}｜{p['title']}" for p in passages]
+    titles = [f"{'🤖 ' if p.get('src') == 'ai' else ''}{p.get('type', '短文')}｜{p['title']}"
+              for p in passages]
     choice = st.radio("選擇一篇閱讀：", titles, key=f"passage_pick_{level}")
     passage = passages[titles.index(choice)]
 
@@ -841,6 +959,76 @@ def _record_push(ok: bool, info: dict, merged: dict | None = None) -> None:
         st.session_state["_push_error"] = info
 
 
+def _append_live_grammar(items: list, level: str) -> int:
+    """把生成的文法累加到 session live_grammar（依 point 去重，含核心與既有 bank）。"""
+    live = st.session_state.setdefault("live_grammar", [])
+    have = {g["point"] for g in data.load_grammar(level)}
+    have |= {g.get("point") for g in ai.load_grammar_bank()}
+    have |= {g.get("point") for g in live}
+    added = 0
+    for it in items:
+        p = it.get("point")
+        if not p or p in have:
+            continue
+        it["jlpt"] = level
+        live.append(it)
+        have.add(p)
+        added += 1
+    return added
+
+
+def _append_live_passage(passage: dict, level: str) -> bool:
+    """把生成的範例短文累加到 session live_passages（依 title 去重）。"""
+    live = st.session_state.setdefault("live_passages", [])
+    have = {p.get("title") for p in data.load_passages(level)}
+    have |= {p.get("title") for p in ai.load_passage_bank()}
+    have |= {p.get("title") for p in live}
+    title = passage.get("title")
+    if not title or title in have:
+        return False
+    passage["jlpt"] = level
+    live.append(passage)
+    return True
+
+
+def _record_list_push(kind: str, ok: bool, info: dict,
+                      merged: list | None = None, file_path: str | None = None) -> None:
+    """list 型 bank（grammar/passage）推回結果記錄；成功則寫回本機並清 session 新增。
+
+    與 vocab 的 _record_push 同理：推回成功後同步寫回本機檔，避免畫面停在舊資料。
+    """
+    import datetime as _dt
+    st.session_state[f"_last_push_{kind}"] = {
+        "ok": ok, "ts": _dt.datetime.now().strftime("%H:%M:%S")}
+    if ok:
+        st.session_state.pop(f"_push_error_{kind}", None)
+        if merged is not None and file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    json.dump(merged, f, ensure_ascii=False, indent=2)
+            except OSError:
+                pass
+        st.session_state[f"live_{'grammar' if kind == 'grammar' else 'passages'}"] = []
+    else:
+        st.session_state[f"_push_error_{kind}"] = info
+
+
+def _render_push_error(kind: str) -> None:
+    """顯示 list 型 bank 上次推回失敗的詳情。"""
+    err = st.session_state.get(f"_push_error_{kind}")
+    last = st.session_state.get(f"_last_push_{kind}")
+    if last:
+        (st.success if last["ok"] else st.error)(
+            f"📤 最後一次推回：{last['ts']} "
+            + ("成功" if last["ok"] else "**失敗** — 請手動下載 JSON 保存！"))
+    if err:
+        with st.expander("🩺 上次推回失敗的詳細原因", expanded=True):
+            st.markdown(f"- **階段**：`{err.get('stage')}`　**HTTP**：`{err.get('code')}`\n"
+                        f"- **Repo**：`{err.get('repo')}@{err.get('branch')}`")
+            st.code(err.get("body", ""), language="json")
+            st.caption("403 → token 沒 Contents:Write；404 → repo/branch 錯；422 → sha 衝突，重按推回。")
+
+
 def _run_inapp_generation(n: int, tier: str, auto_push: bool = False) -> None:
     """雲端內用 Gemini 生成 N 字，寫進 st.session_state.live_bank（三重去重）。"""
     from scripts.generate_vocab import load_wordlist
@@ -897,7 +1085,7 @@ def page_review() -> None:
     st.header("🔁 複習")
     deck = st.session_state.app_data.setdefault("review_cards", [])
     if not deck:
-        st.info("複習清單是空的。到「🤖 AI 情境生成」把句卡加入複習。")
+        st.info("複習清單是空的。到「💬 情境會話」各分頁把句卡加入複習。")
         return
 
     today = today_str()
@@ -1228,7 +1416,7 @@ def main() -> None:
     functions = ["📊 學習儀表板"]
     if level == "N5":
         functions.append("50音")
-    functions += ["核心單字庫", "🃏 單字卡", "文法解說核心",
+    functions += ["🃏 單字卡", "文法解說核心",
                   "💬 情境會話", "📖 單字庫", "🔁 複習"]
 
     feature = st.sidebar.radio("功能", functions, key=f"feature_{level}")
@@ -1259,8 +1447,6 @@ def main() -> None:
         page_dashboard(level)
     elif feature == "50音":
         page_gojuon(level)
-    elif feature == "核心單字庫":
-        page_vocab(level)
     elif feature == "🃏 單字卡":
         page_flashcards(level)
     elif feature == "文法解說核心":
