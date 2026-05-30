@@ -1100,6 +1100,15 @@ def page_dashboard(level: str) -> None:
 # ===========================================================================
 # 🗣️ AI 生活對話（Gemini → 雙語對話 + 文法重點）
 # ===========================================================================
+_JP_DIALOGUE_TOPICS = [
+    "コンビニで会計", "レストランで注文", "道を尋ねる", "美容院で予約",
+    "病院で症状を説明", "友達を食事に誘う", "ホテルのチェックイン", "宅配便の受け取り",
+    "駅で切符を買う", "同僚と週末の話", "大家さんに修理をお願い", "服を試着する",
+    "電話で問い合わせ", "カフェで注文", "面接の自己紹介", "近所の人と挨拶",
+    "ジムの入会相談", "落とし物を届ける", "天気の話で雑談", "誕生日を祝う",
+]
+
+
 def page_ai_dialogue(level: str) -> None:
     st.header(f"🗣️ {data.LEVELS[level]['label']} AI 生活對話")
     with st.expander("💡 這是什麼？怎麼用？", expanded=False):
@@ -1115,7 +1124,26 @@ def page_ai_dialogue(level: str) -> None:
         st.warning("尚未設定 Gemini 金鑰，無法「生成」新對話（下方已累積的對話仍可閱讀）。"
                    "請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`。")
     else:
-        with st.form(f"dlg_form_{level}", clear_on_submit=False):
+        # 🎲 隨機生成：自動挑情境，一鍵冒出新對話並累積
+        if st.button("🎲 隨機生成情境對話", type="primary", use_container_width=True,
+                     key=f"dlg_rand_{level}"):
+            used = {d.get("title") for d in
+                    _level_items(ai.load_dialogue_bank(), "_sess_dialogue", level, "id")}
+            pool = [t for t in _JP_DIALOGUE_TOPICS if t not in used] or _JP_DIALOGUE_TOPICS
+            try:
+                with st.spinner("生成中…"):
+                    dlg = ai.gen_dialogue(random.choice(pool), level, model_label)
+                st.session_state[f"dlg_result_{level}"] = dlg
+                try:
+                    _, ok = _persist_dialogue_jp(dlg, level)
+                except Exception:  # noqa: BLE001
+                    ok = False
+                st.session_state["_dlg_saved"] = ok
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.error(_friendly_gen_error(str(e)))
+        with st.expander("✍️ 想指定情境自己生成？", expanded=False), \
+                st.form(f"dlg_form_{level}", clear_on_submit=False):
             scenario = st.text_input("對話情境",
                                      placeholder="例如：在便利商店結帳並詢問有沒有熱食")
             model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"dlg_tier_{level}")
