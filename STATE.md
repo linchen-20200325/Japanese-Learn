@@ -25,6 +25,9 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - 收藏：單字卡「☆收藏」→「📚 我的資料庫 → ⭐我的最愛」集中檢視。
 - 內容量：db 各級單字 22–24、文法 11、短文 3；AI bank 持續長大（vocab_bank 已 600+）。手動擴充已足，後續靠 App 內 AI 生成。
 
+## 進度
+- 代碼淨化與收尾完成（pyflakes 乾淨、無未使用 import／死碼／debug 殘留）。
+
 ## 待辦
 - （待指示）
 

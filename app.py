@@ -683,7 +683,6 @@ def page_flashcards(level: str) -> None:
                                        "level": level})
         st.rerun()
     if b5.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
-        import random
         st.session_state[ikey] = random.randrange(len(deck))
         st.session_state[fkey] = False
         st.rerun()
@@ -1152,7 +1151,6 @@ def page_dashboard(level: str) -> None:
     dist = mastery_distribution()
     total = len(deck)
     mature = dist["young"] + dist["mature"]
-    today = today_str()
     studied = sum(1 for c in deck if c.get("reps", 0) > 0)
     reviews_total = sum(c.get("reps", 0) for c in deck)
 
