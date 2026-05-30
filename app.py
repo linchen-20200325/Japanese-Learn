@@ -711,27 +711,35 @@ def page_ai_generate(level: str) -> None:
         )
         return
 
-    with st.form(f"gen_form_{level}", clear_on_submit=False):
-        scenario = st.text_input("目標情境",
-                                 placeholder="例如：在餐廳點餐並反映送錯餐點")
-        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS)
-        submitted = st.form_submit_button("生成 ✨", type="primary")
+    rand = st.button("🎲 隨機生成情境", type="primary", use_container_width=True,
+                     key=f"gen_rand_{level}")
+    with st.expander("✍️ 想指定情境自己生成？", expanded=False):
+        with st.form(f"gen_form_{level}", clear_on_submit=False):
+            scenario = st.text_input("目標情境",
+                                     placeholder="例如：在餐廳點餐並反映送錯餐點")
+            model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"gen_tier_{level}")
+            submitted = st.form_submit_button("生成 ✨")
 
-    if submitted:
-        if not scenario.strip():
-            st.warning("請先輸入情境。")
-        else:
-            with st.spinner("生成中…"):
-                try:
-                    raw = ai.generate_material(scenario.strip(), level, model_label)
-                    mermaid, cards = ai.parse_blocks(raw)
-                    st.session_state.gen_result = {
-                        "scenario": scenario.strip(), "level": level,
-                        "mermaid": mermaid, "flashcards": cards or [], "raw": raw,
-                    }
-                except Exception as e:  # noqa: BLE001
-                    st.session_state.gen_result = None
-                    st.error(f"生成失敗：{e}")
+    gen_scn, tier = None, next(iter(ai.GEN_MODEL_TIERS))
+    if rand:
+        gen_scn = random.choice(_JP_DIALOGUE_TOPICS)
+    elif submitted and scenario.strip():
+        gen_scn, tier = scenario.strip(), model_label
+    elif submitted:
+        st.warning("請先輸入情境。")
+
+    if gen_scn:
+        with st.spinner("生成中…"):
+            try:
+                raw = ai.generate_material(gen_scn, level, tier)
+                mermaid, cards = ai.parse_blocks(raw)
+                st.session_state.gen_result = {
+                    "scenario": gen_scn, "level": level,
+                    "mermaid": mermaid, "flashcards": cards or [], "raw": raw,
+                }
+            except Exception as e:  # noqa: BLE001
+                st.session_state.gen_result = None
+                st.error(_friendly_gen_error(str(e)))
 
     result = st.session_state.get("gen_result")
     if result:
