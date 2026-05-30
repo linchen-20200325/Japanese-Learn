@@ -21,6 +21,8 @@ VOCAB_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "voca
 READINGS_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "readings_bank.json")
 # AI 生成的文法永久庫（依級別擴充，越長越多）
 GRAMMAR_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_bank.json")
+# AI 生成的對話永久庫（依級別累積，越長越多）
+DIALOGUE_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dialogue_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -490,6 +492,25 @@ def load_grammar_bank() -> list:
     except OSError:
         mtime = 0.0
     return _load_grammar_bank_cached(mtime)
+
+
+@st.cache_data(show_spinner=False)
+def _load_dialogue_bank_cached(_mtime: float) -> list:
+    try:
+        with open(DIALOGUE_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_dialogue_bank() -> list:
+    """讀取 dialogue_bank.json（AI 生成且已永久保存的對話清單，含 level 欄位）。"""
+    try:
+        mtime = os.path.getmtime(DIALOGUE_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_dialogue_bank_cached(mtime)
 
 
 def gen_subtitle_lesson(raw_text: str, level: str, tier: str) -> dict:
