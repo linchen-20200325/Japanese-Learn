@@ -598,6 +598,7 @@ def page_flashcards(level: str) -> None:
         deck.append({"word": w["kanji"], "kana": w["kana"], "romaji": w["romaji"],
                      "meaning_zh": w["chinese"], "usage_zh": w.get("usage") or w.get("grammar", ""),
                      "pos": w.get("pos", ""),
+                     "mnemonic": w.get("mnemonic", ""), "image": w.get("image", ""),
                      "example_jp": ex.get("jp", ""), "example_zh": ex.get("zh", ""),
                      "src": "core"})
     have = {d["word"] for d in deck}
