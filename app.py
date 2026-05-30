@@ -1649,7 +1649,7 @@ def main() -> None:
     st.sidebar.markdown("### 第二層：功能切換")
 
     # 50 音為基礎功能，僅在 N5 顯示；其餘級別隱藏，保持介面乾淨。
-    functions = ["📊 學習儀表板"]
+    functions = []
     if level == "N5":
         functions.append("50音")
     functions += ["📖 單字庫", "文法解說核心", "📝 測驗練習",
@@ -1680,9 +1680,7 @@ def main() -> None:
     st.divider()
 
     # ---------------- 功能分派（內容依級別動態切換）----------------
-    if feature == "📊 學習儀表板":
-        page_dashboard(level)
-    elif feature == "50音":
+    if feature == "50音":
         page_gojuon(level)
     elif feature == "📖 單字庫":
         page_vocab_all(level)
