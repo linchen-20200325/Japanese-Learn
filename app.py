@@ -1069,28 +1069,37 @@ def page_ai_dialogue(level: str) -> None:
             "喜歡的對話可整段「加入複習」做 SRS。"
         )
 
+    submitted, scenario, model_label = False, "", next(iter(ai.GEN_MODEL_TIERS))
     if not ai.get_api_key():
-        st.warning("尚未設定 Gemini API 金鑰，無法生成。請至側欄或 Cloud Secrets 設定 "
-                   "`GEMINI_API_KEY`（取得：https://aistudio.google.com/apikey）。")
-        return
+        st.warning("尚未設定 Gemini 金鑰，無法「生成」新對話（下方已累積的對話仍可閱讀）。"
+                   "請至側欄或 Cloud Secrets 設定 `GEMINI_API_KEY`。")
+    else:
+        with st.form(f"dlg_form_{level}", clear_on_submit=False):
+            scenario = st.text_input("對話情境",
+                                     placeholder="例如：在便利商店結帳並詢問有沒有熱食")
+            model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"dlg_tier_{level}")
+            submitted = st.form_submit_button("生成 ✨", type="primary")
 
-    with st.form(f"dlg_form_{level}", clear_on_submit=False):
-        scenario = st.text_input("對話情境",
-                                 placeholder="例如：在便利商店結帳並詢問有沒有熱食")
-        model_label = st.selectbox("生成模型", ai.GEN_MODEL_TIERS, key=f"dlg_tier_{level}")
-        submitted = st.form_submit_button("生成 ✨", type="primary")
+    if st.session_state.pop("_dlg_saved", None):
+        st.success("已生成並存進對話庫（下方「已累積的對話」持續長大）。")
 
     if submitted:
         if not scenario.strip():
             st.warning("請先輸入情境。")
         else:
-            with st.spinner("生成中…"):
+            try:
+                with st.spinner("生成中…"):
+                    dlg = ai.gen_dialogue(scenario.strip(), level, model_label)
+                st.session_state[f"dlg_result_{level}"] = dlg  # 先存確保看得到
                 try:
-                    st.session_state[f"dlg_result_{level}"] = ai.gen_dialogue(
-                        scenario.strip(), level, model_label)
-                except Exception as e:  # noqa: BLE001
-                    st.session_state.pop(f"dlg_result_{level}", None)
-                    st.error(_friendly_gen_error(str(e)))
+                    _, ok = _persist_dialogue_jp(dlg, level)
+                except Exception:  # noqa: BLE001
+                    ok = False
+                st.session_state["_dlg_saved"] = ok
+                st.rerun()
+            except Exception as e:  # noqa: BLE001
+                st.session_state.pop(f"dlg_result_{level}", None)
+                st.error(_friendly_gen_error(str(e)))
 
     dlg = st.session_state.get(f"dlg_result_{level}")
     if dlg and dlg.get("lines"):
@@ -1135,6 +1144,31 @@ def page_ai_dialogue(level: str) -> None:
             st.session_state.pop(f"dlg_result_{level}", None)
             st.rerun()
 
+    # 📚 已累積的對話（永久庫，越長越多）
+    bank = [d for d in ai.load_dialogue_bank() if d.get("level") == level]
+    if bank:
+        st.divider()
+        st.markdown(f"### 📚 已累積的對話（{level} 共 {len(bank)} 段）")
+        st.caption("歷次 AI 生成、已存進資料庫的對話，隨時可重讀、加入複習。")
+        for bi, d in enumerate(reversed(bank)):
+            with st.expander(f"📍 {d.get('title','')}　{d.get('title_zh','')}"):
+                if d.get("scene"):
+                    st.caption(f"場景：{d['scene']}")
+                for i, ln in enumerate(d.get("lines", [])):
+                    st.markdown(f"**{ln.get('speaker','')}：** {ln.get('jp','')}")
+                    if ln.get("kana"):
+                        st.caption(f"假名 `{ln['kana']}`　🇹🇼 {ln.get('zh','')}")
+                    if ln.get("jp"):
+                        play_button(ln["jp"], key=f"dlgbank_play_{level}_{bi}_{i}")
+                if st.button(f"➕ 加入 {len(d.get('lines',[]))} 句到複習",
+                             key=f"dlgbank_rev_{level}_{bi}", use_container_width=True):
+                    cards = [{"sentence": ln["jp"], "kana": ln.get("kana", ""),
+                              "chinese": ln.get("zh", ""), "chunk": ln["jp"][:20],
+                              "context": f"對話：{d.get('title','')}"}
+                             for ln in d.get("lines", []) if ln.get("jp")]
+                    n = add_cards_to_review(cards)
+                    st.success(f"已加入 {n} 句。" if n else "已在複習清單中。")
+
 
 # ===========================================================================
 # 📚 AI 互動閱讀（書籍／文章 → 可點字看翻譯 + 發音 + 文法）
@@ -1171,6 +1205,29 @@ def _persist_reading_jp(reading: dict, level: str) -> tuple:
     return ai.github_put_file(
         "readings_bank.json", payload,
         f"readings_bank: AI 生成新增「{reading.get('title','')}」（共 {len(bank)} 篇）")
+
+
+def _persist_dialogue_jp(dlg: dict, level: str) -> tuple:
+    """把生成的對話加入永久庫：寫本機 + 推回 GitHub。回傳 (bank長度, ok)。"""
+    dlg.setdefault("level", level)
+    bank = list(ai.load_dialogue_bank())
+    ids = {d.get("id") for d in bank}
+    rid = dlg.get("id") or dlg.get("title", "")
+    dlg["id"] = rid if rid and rid not in ids else f"{rid or 'dlg'}-{len(bank)}"
+    bank.append(dlg)
+    payload = json.dumps(bank, ensure_ascii=False, indent=2) + "\n"
+    try:
+        with open(ai.DIALOGUE_BANK_FILE, "w", encoding="utf-8") as f:
+            f.write(payload)
+    except OSError:
+        pass
+    for fn in (ai.load_dialogue_bank, ai._load_dialogue_bank_cached):
+        if hasattr(fn, "clear"):
+            fn.clear()
+    ok, _info = ai.github_put_file(
+        "dialogue_bank.json", payload,
+        f"dialogue_bank: AI 生成新增「{dlg.get('title','')}」（共 {len(bank)} 段）")
+    return len(bank), ok
 
 
 def _do_generate_reading(topic: str, level: str, model_label: str) -> None:
