@@ -50,10 +50,12 @@ def load_data() -> dict:
                 d = json.load(f)
             d.setdefault("review_cards", [])
             d.setdefault("lessons", [])
+            d.setdefault("progress", {})
+            d.setdefault("quiz", {})
             return d
         except (json.JSONDecodeError, OSError):
             pass
-    return {"review_cards": [], "lessons": []}
+    return {"review_cards": [], "lessons": [], "progress": {}, "quiz": {}}
 
 
 def save_data() -> None:
@@ -62,6 +64,19 @@ def save_data() -> None:
             json.dump(st.session_state.app_data, f, ensure_ascii=False, indent=2)
     except OSError:
         pass
+
+
+def save_progress() -> None:
+    """把各級別進度（set）與測驗統計同步寫回 app_data 並持久化。
+
+    progress 以 set 存於 session（成員為已學會單字 kanji），存檔前轉成 list；
+    quiz 為各級別答對/總題數統計。兩者皆併入 app_data 一起寫進 dashboard_data.json，
+    重整／重啟瀏覽器仍保留（Cloud 重新部署為暫存，會重置）。
+    """
+    st.session_state.app_data["progress"] = {
+        lv: sorted(s) for lv, s in st.session_state.progress.items()}
+    st.session_state.app_data["quiz"] = st.session_state.quiz
+    save_data()
 
 
 # ===========================================================================
@@ -114,18 +129,29 @@ def render_examples(examples: list, key_prefix: str) -> None:
 # Session State：各級別獨立進度
 # ===========================================================================
 def init_state() -> None:
-    """初始化各級別獨立的學習進度容器（僅執行一次）。"""
+    """初始化各級別獨立的學習進度容器（僅執行一次）。
+
+    progress / quiz 會從持久化的 app_data 還原（重整不歸零）；缺漏的級別補空值，
+    確保新增級別時不 KeyError。
+    """
+    if "app_data" not in st.session_state:
+        # 複習卡、已存課程、進度與測驗（全持久化於 dashboard_data.json）
+        st.session_state.app_data = load_data()
+    saved = st.session_state.app_data
+
     if "progress" not in st.session_state:
-        # 每個級別獨立記錄已學會的單字（以 kanji 作為唯一鍵）
-        st.session_state.progress = {lv: set() for lv in data.LEVEL_ORDER}
+        # 每個級別獨立記錄已學會的單字（以 kanji 作為唯一鍵）；從存檔的 list 還原成 set
+        saved_prog = saved.get("progress", {})
+        st.session_state.progress = {
+            lv: set(saved_prog.get(lv, [])) for lv in data.LEVEL_ORDER}
     if "quiz" not in st.session_state:
         # 每個級別獨立的測驗統計
+        saved_quiz = saved.get("quiz", {})
         st.session_state.quiz = {
-            lv: {"correct": 0, "total": 0} for lv in data.LEVEL_ORDER
+            lv: {"correct": saved_quiz.get(lv, {}).get("correct", 0),
+                 "total": saved_quiz.get(lv, {}).get("total", 0)}
+            for lv in data.LEVEL_ORDER
         }
-    if "app_data" not in st.session_state:
-        # 複習卡與已存課程（全級別共用，持久化於 dashboard_data.json）
-        st.session_state.app_data = load_data()
 
 
 def mark_learned(level: str, kanji: str) -> None:
@@ -236,6 +262,7 @@ def page_vocab(level: str) -> None:
                         learned.discard(word["kanji"])
                     else:
                         mark_learned(level, word["kanji"])
+                    save_progress()
                     st.rerun()
 
             with st.expander("👀 顯示中文與唸法"):
@@ -407,6 +434,7 @@ def _vocab_quiz(level: str) -> None:
                 st.success("正解！🎉")
             else:
                 st.error(f"再加油！正確答案是：{q['answer']}")
+            save_progress()
     with col_next:
         if st.button("下一題 ➡️", key=f"next_{level}_{q['nonce']}"):
             st.session_state[quiz_key] = _new_question(vocab)
@@ -678,6 +706,7 @@ def page_flashcards(level: str) -> None:
             learned.discard(card["word"])
         else:
             learned.add(card["word"])
+        save_progress()
         st.rerun()
     if b4.button("🎲 隨機", use_container_width=True, key=f"fc_rand_{level}"):
         import random

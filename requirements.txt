@@ -1,3 +1,4 @@
 streamlit>=1.32
 gTTS>=2.5
 google-genai>=0.3
+pytest>=8.0
