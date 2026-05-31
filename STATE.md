@@ -11,7 +11,7 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - `ai.py`：Gemini 互動層（多金鑰輪轉、生成、GitHub 推回）
 - `data.py`：資料存取層（從 `db/` 載入，含 `lru_cache`）
 - `db/N1~N5.json`、`db/gojuon.json`：內建單字／文法／短文／50音
-- `vocab_bank.json`／`grammar_bank.json`／`dialogue_bank.json`／`readings_bank.json`：AI 生成累積庫（推 GitHub 永久保存）
+- `vocab_bank.json`／`grammar_bank.json`／`dialogue_bank.json`／`readings_bank.json`／`listening_bank.json`：AI 生成累積庫（推 GitHub 永久保存）
 - `scripts/generate_vocab.py`＋`vocab_wordlist.txt`：本機批次生成詞表
 - `requirements.txt`：streamlit、gTTS、google-genai
 
@@ -22,11 +22,12 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - 生成 → session 疊加層（即時可見）→ 推 GitHub `*_bank.json`（只增不減累積）。金鑰存 Streamlit Secrets（`GEMINI_API_KEYS`／`GITHUB_TOKEN`）。
 - 學習進度持久化：`progress`（已學會，各級別）／`quiz`（測驗統計）／`favorites`（收藏，跨級別）皆存 `dashboard_data.json`（gitignore，部署本機；Cloud 重新部署會重置）。
 - 測驗 4 題型：中→假名、日→中、🔊聽發音→假名、文法意義→文型（`page_quiz`／`_quiz_question`）。
-- 聽力：日／英雙語各自獨立（`page_listening`，分頁籤）。`synthesize_speech(text, lang)` 支援 gTTS `ja`／`en`；範本存 `db/listening.json`（`load_listening(lang)`）。先聽→開原文核對→理解測驗。
+- 聽力：日／英雙語各自獨立（`page_listening`，分頁籤）。`synthesize_speech(text, lang)` 支援 gTTS `ja`／`en`；內建範本 `db/listening.json`（`load_listening(lang)`）。先聽→開原文核對→理解測驗。可 🤖 AI 隨機生成新題庫（`gen_listening`）→ session 疊加＋推 `listening_bank.json` 永久累積（雙語混存，`lang` 欄區分）。
 - 收藏：單字卡「☆收藏」→「📚 我的資料庫 → ⭐我的最愛」集中檢視。
 - 內容量：db 各級單字 22–24、文法 11、短文 3；AI bank 持續長大（vocab_bank 已 600+）。手動擴充已足，後續靠 App 內 AI 生成。
 
 ## 進度
+- 聽力新增 🤖 AI 隨機生成題庫（日／英），推 `listening_bank.json` 永久累積。
 - 新增 🎧 聽力練習（日／英雙語各自獨立，含逐句播放＋中譯＋理解測驗）。
 - 代碼淨化與收尾完成（pyflakes 乾淨、無未使用 import／死碼／debug 殘留）。
 
@@ -34,5 +35,5 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - （待指示）
 
 ## 測試
-- `pytest -q`：47 passed（`tests/test_data.py` 資料完整性＋聽力範本 + `tests/test_ai.py` 純函式解析）。
+- `pytest -q`：49 passed（`tests/test_data.py` 資料完整性＋聽力範本 + `tests/test_ai.py` 純函式解析＋聽力題庫載入）。
 - 跨部署永久化：「📚 我的資料庫 → ☁️ 備份／還原」手動推 GitHub `progress_backup.json`（還原採聯集）。

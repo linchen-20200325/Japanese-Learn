@@ -127,3 +127,17 @@ def test_clean_subtitle_strips_srt_metadata():
     out = ai.clean_subtitle_text(raw)
     assert out == "おはよう\nございます"
     assert "-->" not in out and "<i>" not in out
+
+
+# ---------------------------------------------------------------------------
+# 聽力題庫：永久庫載入與生成器驗證邏輯（不需網路的部分）
+# ---------------------------------------------------------------------------
+def test_listening_bank_loads_list():
+    """load_listening_bank 永遠回傳 list（檔案不存在時為空）。"""
+    assert isinstance(ai.load_listening_bank(), list)
+
+
+def test_listening_prompts_present():
+    """日／英聽力生成提示皆非空且要求 JSON。"""
+    assert "JSON" in ai.LISTENING_GEN_PROMPT_JA
+    assert "JSON" in ai.LISTENING_GEN_PROMPT_EN
