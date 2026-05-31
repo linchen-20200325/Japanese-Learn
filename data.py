@@ -108,3 +108,18 @@ def load_gojuon() -> Dict[str, List[Dict[str, str]]]:
     回傳含 seion / dakuon / handakuon / yoon 四組的字典。
     """
     return _load_json("gojuon.json")
+
+
+def load_listening(lang: str) -> List[Dict]:
+    """
+    載入聽力範本（lang="ja" 日文 / "en" 英文）。
+
+    db/listening.json 結構：
+        {
+          "ja": [ {title, level, lang, script:[{text, zh}, ...],
+                    questions:[{q, options:[...], answer}]}, ... ],
+          "en": [ ... 同上 ... ]
+        }
+    每段 script 的 text 為該語言原文、zh 為中文翻譯。
+    """
+    return _load_json("listening.json").get(lang, [])

@@ -1,0 +1,100 @@
+{
+  "ja": [
+    {
+      "title": "カフェでの注文",
+      "level": "N5",
+      "lang": "ja",
+      "scene": "店員とお客さんの会話（カフェ）",
+      "script": [
+        {"text": "いらっしゃいませ。ご注文はお決まりですか。", "kana": "いらっしゃいませ。ごちゅうもんはおきまりですか。", "zh": "歡迎光臨。請問您決定好要點什麼了嗎？"},
+        {"text": "はい、ホットコーヒーを一つください。", "kana": "はい、ホットコーヒーをひとつください。", "zh": "好的，請給我一杯熱咖啡。"},
+        {"text": "サイズはいかがなさいますか。", "kana": "サイズはいかがなさいますか。", "zh": "請問尺寸要哪一種呢？"},
+        {"text": "Mサイズでお願いします。", "kana": "エムサイズでおねがいします。", "zh": "麻煩給我中杯。"}
+      ],
+      "questions": [
+        {"q": "お客さんは何を注文しましたか。", "options": ["アイスコーヒー", "ホットコーヒー", "紅茶", "緑茶"], "answer": "ホットコーヒー"},
+        {"q": "サイズは何にしましたか。", "options": ["Sサイズ", "Mサイズ", "Lサイズ", "特大"], "answer": "Mサイズ"}
+      ]
+    },
+    {
+      "title": "駅で道を尋ねる",
+      "level": "N4",
+      "lang": "ja",
+      "scene": "通行人に道を聞く（駅前）",
+      "script": [
+        {"text": "すみません、中央図書館はどう行けばいいですか。", "kana": "すみません、ちゅうおうとしょかんはどういけばいいですか。", "zh": "不好意思，請問中央圖書館要怎麼走？"},
+        {"text": "この道をまっすぐ行って、二つ目の信号を右に曲がってください。", "kana": "このみちをまっすぐいって、ふたつめのしんごうをみぎにまがってください。", "zh": "沿著這條路直走，在第二個紅綠燈右轉。"},
+        {"text": "歩いてどのくらいかかりますか。", "kana": "あるいてどのくらいかかりますか。", "zh": "走路大約要多久？"},
+        {"text": "そうですね、十分ぐらいですよ。", "kana": "そうですね、じゅっぷんぐらいですよ。", "zh": "嗯，大概十分鐘喔。"}
+      ],
+      "questions": [
+        {"q": "二つ目の信号でどうしますか。", "options": ["左に曲がる", "右に曲がる", "まっすぐ行く", "戻る"], "answer": "右に曲がる"},
+        {"q": "図書館まで歩いてどのくらいですか。", "options": ["五分", "十分", "二十分", "三十分"], "answer": "十分"}
+      ]
+    },
+    {
+      "title": "天気予報",
+      "level": "N3",
+      "lang": "ja",
+      "scene": "ラジオの天気予報（独白）",
+      "script": [
+        {"text": "おはようございます。今日の天気をお伝えします。", "kana": "おはようございます。きょうのてんきをおつたえします。", "zh": "早安，為您播報今天的天氣。"},
+        {"text": "午前中は晴れますが、午後から雲が広がるでしょう。", "kana": "ごぜんちゅうははれますが、ごごからくもがひろがるでしょう。", "zh": "上午會放晴，但下午起雲量會增多。"},
+        {"text": "夜には雨が降る可能性が高いので、傘をお持ちください。", "kana": "よるにはあめがふるかのうせいがたかいので、かさをおもちください。", "zh": "入夜後下雨機率高，請記得帶傘。"}
+      ],
+      "questions": [
+        {"q": "午後の天気はどうなりますか。", "options": ["ずっと晴れ", "雲が広がる", "雪が降る", "霧が出る"], "answer": "雲が広がる"},
+        {"q": "夜は何が必要ですか。", "options": ["帽子", "サングラス", "傘", "手袋"], "answer": "傘"}
+      ]
+    }
+  ],
+  "en": [
+    {
+      "title": "Ordering at a Café",
+      "level": "Beginner",
+      "lang": "en",
+      "scene": "A customer ordering at a café",
+      "script": [
+        {"text": "Good morning! What can I get for you today?", "zh": "早安！今天想喝點什麼呢？"},
+        {"text": "I'd like a medium latte, please.", "zh": "我要一杯中杯拿鐵，謝謝。"},
+        {"text": "Sure. Would you like anything to eat with that?", "zh": "好的。要不要搭配什麼點心呢？"},
+        {"text": "No, thanks. Just the latte.", "zh": "不用了，謝謝。只要拿鐵就好。"}
+      ],
+      "questions": [
+        {"q": "What did the customer order?", "options": ["A cappuccino", "A medium latte", "An espresso", "A tea"], "answer": "A medium latte"},
+        {"q": "Did the customer want any food?", "options": ["Yes, a sandwich", "Yes, a cookie", "No, just the drink", "Yes, a cake"], "answer": "No, just the drink"}
+      ]
+    },
+    {
+      "title": "Asking for Directions",
+      "level": "Intermediate",
+      "lang": "en",
+      "scene": "A tourist asking a local for directions",
+      "script": [
+        {"text": "Excuse me, could you tell me how to get to the train station?", "zh": "不好意思，可以告訴我怎麼去火車站嗎？"},
+        {"text": "Sure. Go straight down this street and turn left at the second traffic light.", "zh": "當然。沿這條街直走，在第二個紅綠燈左轉。"},
+        {"text": "How long does it take on foot?", "zh": "走路要多久？"},
+        {"text": "About ten minutes. You can't miss it.", "zh": "大約十分鐘，你一定找得到。"}
+      ],
+      "questions": [
+        {"q": "Where does the tourist want to go?", "options": ["The airport", "The train station", "The library", "The hospital"], "answer": "The train station"},
+        {"q": "At the second traffic light, what should they do?", "options": ["Turn right", "Turn left", "Go straight", "Stop"], "answer": "Turn left"}
+      ]
+    },
+    {
+      "title": "Weather Forecast",
+      "level": "Intermediate",
+      "lang": "en",
+      "scene": "A radio weather forecast (monologue)",
+      "script": [
+        {"text": "Good morning, and here is today's weather forecast.", "zh": "早安，以下是今天的天氣預報。"},
+        {"text": "It will be sunny in the morning, but clouds will move in during the afternoon.", "zh": "上午晴朗，但下午起雲量會增多。"},
+        {"text": "There's a high chance of rain at night, so don't forget your umbrella.", "zh": "入夜後下雨機率高，別忘了帶傘。"}
+      ],
+      "questions": [
+        {"q": "What will the afternoon be like?", "options": ["Sunny all day", "Cloudy", "Snowy", "Foggy"], "answer": "Cloudy"},
+        {"q": "What should you bring at night?", "options": ["A hat", "Sunglasses", "An umbrella", "Gloves"], "answer": "An umbrella"}
+      ]
+    }
+  ]
+}

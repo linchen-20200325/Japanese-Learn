@@ -107,3 +107,34 @@ def test_levels_metadata_consistent():
     for lv, meta in data.LEVELS.items():
         for key in ("label", "color", "desc"):
             assert meta.get(key), f"{lv} 的中繼資料缺 {key}"
+
+
+# ---------------------------------------------------------------------------
+# 聽力範本（日／英雙語）
+# ---------------------------------------------------------------------------
+def test_listening_both_languages_present():
+    """日文與英文聽力範本皆存在且非空。"""
+    for lang in ("ja", "en"):
+        samples = data.load_listening(lang)
+        assert samples, f"聽力缺 {lang} 範本或為空"
+
+
+def test_listening_structure():
+    """每則聽力須有 title、非空 script（每句含 text/zh），題目選項含正解。"""
+    for lang in ("ja", "en"):
+        for s in data.load_listening(lang):
+            assert s.get("title", "").strip(), f"{lang} 有聽力缺 title"
+            script = s.get("script", [])
+            assert script, f"{lang} 聽力 {s.get('title')} 沒有 script"
+            for line in script:
+                assert line.get("text", "").strip(), f"{lang} {s['title']} 有句子缺 text"
+                assert "zh" in line, f"{lang} {s['title']} 有句子缺 zh"
+            for q in s.get("questions", []):
+                assert q.get("q", "").strip(), f"{lang} {s['title']} 有題目缺 q"
+                assert q.get("answer") in q.get("options", []), \
+                    f"{lang} {s['title']} 題目正解不在選項中"
+
+
+def test_listening_unknown_lang_empty():
+    """未知語言回傳空清單，不報錯。"""
+    assert data.load_listening("zz") == []

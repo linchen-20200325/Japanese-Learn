@@ -23,6 +23,8 @@ READINGS_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "r
 GRAMMAR_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "grammar_bank.json")
 # AI 生成的對話永久庫（依級別累積，越長越多）
 DIALOGUE_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dialogue_bank.json")
+# AI 生成的聽力永久庫（日／英雙語混存，依 lang 欄位區分，持續累積）
+LISTENING_BANK_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "listening_bank.json")
 DEFAULT_REPO = "linchen-20200325/Japanese-Learn"
 
 
@@ -517,6 +519,25 @@ def load_dialogue_bank() -> list:
     return _load_dialogue_bank_cached(mtime)
 
 
+@st.cache_data(show_spinner=False)
+def _load_listening_bank_cached(_mtime: float) -> list:
+    try:
+        with open(LISTENING_BANK_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def load_listening_bank() -> list:
+    """讀取 listening_bank.json（AI 生成且已永久保存的聽力清單，含 lang/level 欄位）。"""
+    try:
+        mtime = os.path.getmtime(LISTENING_BANK_FILE)
+    except OSError:
+        mtime = 0.0
+    return _load_listening_bank_cached(mtime)
+
+
 def gen_subtitle_lesson(raw_text: str, level: str, tier: str) -> dict:
     """把貼上的日文台詞／字幕轉成互動學習課程（結構同閱讀條目）。"""
     cleaned = clean_subtitle_text(raw_text)[:4000]
@@ -536,6 +557,86 @@ def gen_dialogue(scenario: str, level: str, tier: str) -> dict:
     if not m:
         raise RuntimeError(f"Gemini 回應內無 JSON：{text[:200]}")
     return json.loads(m.group(0))
+
+
+LISTENING_GEN_PROMPT_JA = """你是 JLPT 日文聽力教材編輯。使用者給「JLPT 級別」與「已存在的聽力標題（不可重複）」，
+你要產出該級別**新的、不重複**的日文聽力範本（短對話或獨白），難度貼合該級別。
+
+# 嚴格輸出 JSON（只輸出 JSON array，前後不得有任何文字、不得包 markdown code fence）
+[
+  {
+    "title": "簡短日文標題（如 病院での受付）",
+    "level": "N5",
+    "scene": "繁中一句情境說明（如 患者と受付の会話）",
+    "script": [
+      {"text": "日文句（含漢字）", "kana": "整句假名", "zh": "繁中翻譯"},
+      {"text": "第二句", "kana": "整句假名", "zh": "繁中翻譯"}
+    ],
+    "questions": [
+      {"q": "日文聽力理解問題", "options": ["選項1", "選項2", "選項3", "選項4"], "answer": "正解（須與某個選項一字不差）"}
+    ]
+  }
+]
+
+# 規範
+- 嚴禁與「已存在標題」清單重複。
+- script 至少 3 句，每句務必含 kana 整句假名與 zh 繁中翻譯。
+- 每則至少 2 題理解測驗，answer 必須與 options 之一完全相同。
+- 難度貼合級別：N5 最基礎、N1 最進階。
+"""
+
+LISTENING_GEN_PROMPT_EN = """You are an English listening-comprehension material editor.
+The user gives a difficulty level and a list of existing titles (do NOT repeat them).
+Produce brand-new, non-repeating English listening samples (short dialogue or monologue).
+
+# Output STRICT JSON only (a single JSON array; no surrounding text, no markdown code fence)
+[
+  {
+    "title": "Short English title",
+    "level": "Beginner",
+    "scene": "One-line scene description in Traditional Chinese",
+    "script": [
+      {"text": "English sentence", "zh": "繁體中文翻譯"},
+      {"text": "Second sentence", "zh": "繁體中文翻譯"}
+    ],
+    "questions": [
+      {"q": "English comprehension question", "options": ["opt1", "opt2", "opt3", "opt4"], "answer": "must equal one option exactly"}
+    ]
+  }
+]
+
+# Rules
+- Never repeat any existing title.
+- script must have at least 3 sentences; each sentence needs text (English) and zh (Traditional Chinese translation).
+- At least 2 questions per sample; answer must exactly match one of options.
+- Match the requested difficulty level.
+"""
+
+
+def gen_listening(level: str, lang: str, existing_titles: list, n: int, tier: str) -> list:
+    """為指定語言（lang="ja"/"en"）生成 n 則不重複的聽力範本。回傳 list（每筆含 lang/level）。"""
+    prompt = LISTENING_GEN_PROMPT_JA if lang == "ja" else LISTENING_GEN_PROMPT_EN
+    existing = "、".join(existing_titles) if existing_titles else "（無）"
+    text = _llm_generate(
+        prompt,
+        f"級別：{level}\n生成數量：{n}\n已存在標題（不可重複）：{existing}",
+        tier, max_tokens=8000)
+    items = extract_json_array(text)
+    out, have = [], set(existing_titles)
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        title = (it.get("title") or "").strip()
+        script = it.get("script")
+        if not title or title in have:
+            continue
+        if not isinstance(script, list) or not script:
+            continue
+        it["lang"] = lang
+        it.setdefault("level", level)
+        out.append(it)
+        have.add(title)
+    return out
 
 
 # ===========================================================================
