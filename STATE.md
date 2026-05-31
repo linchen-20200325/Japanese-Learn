@@ -16,21 +16,23 @@ JLPT 日文學習 App（Streamlit + Gemini API + gTTS 發音）。部署：GitHu
 - `requirements.txt`：streamlit、gTTS、google-genai
 
 ## 功能（選單）
-50音 / 📖 單字庫 / 文法解說核心 / 📝 測驗練習 / 🗣️ AI 生活對話 / 🤖 AI 情境生成 / 📚 AI 互動閱讀 / 🎬 影視字幕 / 📚 我的資料庫 / 🔁 複習
+50音 / 📖 單字庫 / 文法解說核心 / 📝 測驗練習 / 🎧 聽力練習 / 🗣️ AI 生活對話 / 🤖 AI 情境生成 / 📚 AI 互動閱讀 / 🎬 影視字幕 / 📚 我的資料庫 / 🔁 複習
 
 ## 核心機制
 - 生成 → session 疊加層（即時可見）→ 推 GitHub `*_bank.json`（只增不減累積）。金鑰存 Streamlit Secrets（`GEMINI_API_KEYS`／`GITHUB_TOKEN`）。
 - 學習進度持久化：`progress`（已學會，各級別）／`quiz`（測驗統計）／`favorites`（收藏，跨級別）皆存 `dashboard_data.json`（gitignore，部署本機；Cloud 重新部署會重置）。
 - 測驗 4 題型：中→假名、日→中、🔊聽發音→假名、文法意義→文型（`page_quiz`／`_quiz_question`）。
+- 聽力：日／英雙語各自獨立（`page_listening`，分頁籤）。`synthesize_speech(text, lang)` 支援 gTTS `ja`／`en`；範本存 `db/listening.json`（`load_listening(lang)`）。先聽→開原文核對→理解測驗。
 - 收藏：單字卡「☆收藏」→「📚 我的資料庫 → ⭐我的最愛」集中檢視。
 - 內容量：db 各級單字 22–24、文法 11、短文 3；AI bank 持續長大（vocab_bank 已 600+）。手動擴充已足，後續靠 App 內 AI 生成。
 
 ## 進度
+- 新增 🎧 聽力練習（日／英雙語各自獨立，含逐句播放＋中譯＋理解測驗）。
 - 代碼淨化與收尾完成（pyflakes 乾淨、無未使用 import／死碼／debug 殘留）。
 
 ## 待辦
 - （待指示）
 
 ## 測試
-- `pytest -q`：44 passed（`tests/test_data.py` 資料完整性 + `tests/test_ai.py` 純函式解析）。
+- `pytest -q`：47 passed（`tests/test_data.py` 資料完整性＋聽力範本 + `tests/test_ai.py` 純函式解析）。
 - 跨部署永久化：「📚 我的資料庫 → ☁️ 備份／還原」手動推 GitHub `progress_backup.json`（還原採聯集）。

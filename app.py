@@ -85,30 +85,30 @@ def save_progress() -> None:
 # 語音引擎（記憶體級，避免 File Lock）
 # ===========================================================================
 @st.cache_data(show_spinner=False)
-def synthesize_speech(text: str) -> bytes:
+def synthesize_speech(text: str, lang: str = "ja") -> bytes:
     """
-    將日文文字合成為 MP3 位元組串。
+    將文字合成為 MP3 位元組串（預設日文，可指定語言如 "en" 英文）。
 
     完全在記憶體中操作（BytesIO），不寫入磁碟，
     因此不會產生暫存檔案，也不會發生檔案鎖定問題。
-    結果以 st.cache_data 快取，重複播放同一文字不需重新合成。
+    結果以 st.cache_data 快取（含 lang），重複播放同一文字不需重新合成。
     """
     buffer = BytesIO()
-    tts = gTTS(text=text, lang="ja")
+    tts = gTTS(text=text, lang=lang)
     tts.write_to_fp(buffer)
     buffer.seek(0)
     return buffer.getvalue()
 
 
-def play_button(text: str, key: str, label: str = "🔊 發音") -> None:
-    """渲染一個發音按鈕；按下後於記憶體中合成並播放。"""
+def play_button(text: str, key: str, label: str = "🔊 發音", lang: str = "ja") -> None:
+    """渲染一個發音按鈕；按下後於記憶體中合成並播放（可指定語言）。"""
     if not _GTTS_AVAILABLE:
         st.caption("🔇 語音功能需安裝 gTTS 並連線網路")
         return
 
     if st.button(label, key=key):
         try:
-            audio_bytes = synthesize_speech(text)
+            audio_bytes = synthesize_speech(text, lang=lang)
             st.audio(audio_bytes, format="audio/mp3")
         except Exception as exc:  # 網路或服務暫時不可用
             st.warning(f"語音合成失敗（請檢查網路）：{exc}")
@@ -1876,6 +1876,71 @@ def page_scenario(level: str) -> None:
         page_ai_reading(level)
 
 
+def _render_listening(level: str, lang: str) -> None:
+    """渲染單一語言的聽力範本（lang="ja" 日文 / "en" 英文）。"""
+    samples = data.load_listening(lang)
+    if not samples:
+        st.info("此語言尚無聽力範本。")
+        return
+
+    titles = [f"[{s.get('level', '')}] {s['title']}" for s in samples]
+    choice = st.radio("選擇聽力範本：", titles, key=f"listen_pick_{lang}_{level}")
+    sample = samples[titles.index(choice)]
+
+    if sample.get("scene"):
+        st.caption(f"🎬 情境：{sample['scene']}")
+
+    # 整段朗讀（先聽再看，訓練聽力）
+    full_text = " ".join(s["text"] for s in sample.get("script", []))
+    play_button(full_text, key=f"listen_full_{lang}_{level}",
+                label="🔊 整段播放", lang=lang)
+
+    show_script = st.toggle("顯示原文與中文翻譯",
+                            key=f"listen_show_{lang}_{level}")
+
+    for i, line in enumerate(sample.get("script", [])):
+        with st.container(border=True):
+            cols = st.columns([1, 4])
+            with cols[0]:
+                play_button(line["text"], key=f"listen_{lang}_{level}_{i}",
+                            label="🔊 播放", lang=lang)
+            with cols[1]:
+                if show_script:
+                    st.markdown(line["text"])
+                    if line.get("kana"):
+                        st.caption(f"📖 唸法：{line['kana']}")
+                    st.caption(f"🇹🇼 {line.get('zh', '')}")
+                else:
+                    st.caption("（先聽，按上方播放；理解後再開啟原文核對）")
+
+    # 聽力理解測驗
+    questions = sample.get("questions", [])
+    if questions:
+        st.divider()
+        st.subheader("📝 聽力理解測驗")
+        for qi, q in enumerate(questions):
+            st.markdown(f"**Q{qi + 1}. {q['q']}**")
+            pick = st.radio("選擇答案：", q["options"], index=None,
+                            key=f"listen_q_{lang}_{level}_{titles.index(choice)}_{qi}")
+            if pick is not None:
+                if pick == q["answer"]:
+                    st.success("✅ 正確！")
+                else:
+                    st.error(f"❌ 正確答案：{q['answer']}")
+
+
+def page_listening(level: str) -> None:
+    """聽力練習：日文與英文各自獨立的聽力範本（分頁籤切換）。"""
+    st.header(f"🎧 {data.LEVELS[level]['label']} 聽力練習")
+    st.caption("先聽整段或逐句音檔，理解後再開啟原文與中文翻譯核對，最後做聽力理解測驗。")
+
+    tab_ja, tab_en = st.tabs(["🇯🇵 日文聽力", "🇬🇧 英文聽力"])
+    with tab_ja:
+        _render_listening(level, "ja")
+    with tab_en:
+        _render_listening(level, "en")
+
+
 # ===========================================================================
 # 主程式
 # ===========================================================================
@@ -1902,7 +1967,7 @@ def main() -> None:
     functions = []
     if level == "N5":
         functions.append("50音")
-    functions += ["📖 單字庫", "文法解說核心", "📝 測驗練習",
+    functions += ["📖 單字庫", "文法解說核心", "📝 測驗練習", "🎧 聽力練習",
                   "🗣️ AI 生活對話", "🤖 AI 情境生成", "📚 AI 互動閱讀",
                   "🎬 影視字幕", "📚 我的資料庫", "🔁 複習"]
 
@@ -1938,6 +2003,8 @@ def main() -> None:
         page_grammar(level)
     elif feature == "📝 測驗練習":
         page_quiz(level)
+    elif feature == "🎧 聽力練習":
+        page_listening(level)
     elif feature == "🗣️ AI 生活對話":
         page_ai_dialogue(level)
     elif feature == "🤖 AI 情境生成":
